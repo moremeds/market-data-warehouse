@@ -9,7 +9,8 @@
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>$HOME/dev/apps/finance/market-data-warehouse/scripts/run_daily_update.sh</string>
+        <!-- Replace /path/to/repo with your actual repo path -->
+        <string>/path/to/repo/scripts/run_daily_update.sh</string>
     </array>
 
     <key>StartCalendarInterval</key>

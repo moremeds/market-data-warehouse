@@ -187,7 +187,8 @@ python scripts/daily_update.py --port 7497 --max-concurrent 4 --batch-size 25
 ### Scheduling with launchd (macOS)
 
 ```bash
-cp scripts/com.market-warehouse.daily-update.plist ~/Library/LaunchAgents/
+# Copy example and substitute your repo path
+sed "s|/path/to/repo|$(pwd)|g" scripts/com.market-warehouse.daily-update.plist.example > ~/Library/LaunchAgents/com.market-warehouse.daily-update.plist
 launchctl load ~/Library/LaunchAgents/com.market-warehouse.daily-update.plist
 ```
 

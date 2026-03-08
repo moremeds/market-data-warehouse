@@ -19,7 +19,7 @@ market-data-warehouse/              # Git repo
 │   ├── run_backfill_all.sh         # Auto-restarting runner for all presets
 │   ├── daily_update.py             # Daily incremental update (scheduled)
 │   ├── run_daily_update.sh         # Shell wrapper for launchd/cron
-│   ├── com.market-warehouse.daily-update.plist  # macOS launchd config
+│   ├── com.market-warehouse.daily-update.plist.example  # macOS launchd template
 │   └── pre-commit-secrets-scan.sh  # Pre-commit hook: secrets scanner
 ├── tests/
 │   ├── conftest.py                 # Shared fixtures: tmp_duckdb, db
@@ -142,7 +142,8 @@ python scripts/daily_update.py --batch-size 25                  # Custom batch s
 
 **Scheduling with launchd** (macOS):
 ```bash
-cp scripts/com.market-warehouse.daily-update.plist ~/Library/LaunchAgents/
+# Copy example, replace /path/to/repo with your actual repo path
+sed "s|/path/to/repo|$(pwd)|g" scripts/com.market-warehouse.daily-update.plist.example > ~/Library/LaunchAgents/com.market-warehouse.daily-update.plist
 launchctl load ~/Library/LaunchAgents/com.market-warehouse.daily-update.plist
 ```
 Runs at 21:05 UTC daily (4:05 PM EST / 5:05 PM EDT — always after market close). Non-trading days are harmless no-ops.
