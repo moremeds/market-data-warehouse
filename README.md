@@ -23,6 +23,24 @@ In one sentence:
 
 **It’s a local-first, production-ready market data warehouse for serious quantitative research and analytics.**
 
+## Dependencies
+
+- **Python 3.12+** — [python.org](https://www.python.org/downloads/) or `brew install python@3.12`
+- **DuckDB** — [duckdb.org](https://duckdb.org/docs/installation/) or `brew install duckdb`
+- **Interactive Brokers account** — [interactivebrokers.com](https://www.interactivebrokers.com/) (live or paper trading account required for market data API access)
+- **IB Gateway** (offline version) — [download page](https://www.interactivebrokers.com/en/trading/ibgateway-stable.php) (included with TWS installer; must be the offline/stable version)
+- **IBC** (IB Controller) — [github.com/IbcAlpha/IBC](https://github.com/IbcAlpha/IBC/releases/latest) (automates Gateway login, reconnection, and daily restarts)
+- **ClickHouse** (optional) — [clickhouse.com](https://clickhouse.com/docs/en/install) or `brew install clickhouse` (only needed for production-style benchmarking)
+- **Homebrew** (macOS) — [brew.sh](https://brew.sh/)
+
+### Python packages (installed in `~/market-warehouse/.venv/`)
+
+- `duckdb` — local analytical engine
+- `ib_insync` — async IB API client
+- `polars`, `pandas`, `pyarrow` — data manipulation and Parquet I/O
+- `rich` — terminal UI (progress bars, logging)
+- `pytest`, `pytest-cov`, `responses` — testing
+
 
 ## IB Gateway with IBC (Automated Connection Management)
 
