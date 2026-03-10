@@ -38,6 +38,8 @@ ib.connect(host='127.0.0.1', port=4001, clientId=0, timeout=4.0)
 
 **Critical rule:** Only ONE connection can use `clientId=0` at a time. Duplicate disconnects the older session.
 
+**Repo wrapper note:** `clients/ib_client.py` still defaults to `clientId=0`, but `IBClient.connect()` now retries successive `clientId` values automatically when IB returns error `326` (`client id already in use`). Use an explicit `client_id` when you need a stable, predictable identity across multiple long-lived processes.
+
 ### Market Data Type
 ```python
 ib.reqMarketDataType(type)
@@ -553,5 +555,7 @@ The **master client** has special privileges:
 - Can modify ANY order
 
 **Important:** Only ONE connection can use `clientId=0` at a time. If TWS is using it, the API connection will be rejected (or vice versa).
+
+**Project note:** the repo's `IBClient.connect()` wrapper softens this by retrying the next `clientId` values after IB error `326`, but the underlying master-client rule still applies. Use an explicit `client_id` or `client_name` when the process identity must remain stable.
 
 Use `ib_order_manage.py` for cancel/modify operations — it connects as master to handle TWS-placed orders.

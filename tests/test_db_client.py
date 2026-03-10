@@ -355,3 +355,70 @@ class TestExportToParquet:
         out = tmp_path / "a" / "b" / "c" / "test.parquet"
         db.export_to_parquet("SELECT 1 AS x", out)
         assert out.exists()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# write_ticker_parquet
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestWriteTickerParquet:
+    @pytest.mark.integration
+    def test_writes_parquet_to_correct_path(self, db, tmp_path):
+        sid = db.upsert_symbol("AAPL", "equity", "SMART")
+        db.insert_equities_daily(
+            [
+                {
+                    "trade_date": "2025-01-02",
+                    "symbol_id": sid,
+                    "open": 150.0, "high": 155.0, "low": 149.0,
+                    "close": 153.0, "adj_close": 153.0, "volume": 1000000,
+                }
+            ]
+        )
+        bronze = tmp_path / "bronze"
+        result = db.write_ticker_parquet("AAPL", sid, bronze)
+        expected = bronze / "symbol=AAPL" / "data.parquet"
+        assert result == expected
+        assert expected.exists()
+        assert expected.stat().st_size > 0
+
+    @pytest.mark.integration
+    def test_parquet_contains_expected_columns(self, db, tmp_path):
+        sid = db.upsert_symbol("AAPL", "equity", "SMART")
+        db.insert_equities_daily(
+            [
+                {
+                    "trade_date": "2025-01-02",
+                    "symbol_id": sid,
+                    "open": 150.0, "high": 155.0, "low": 149.0,
+                    "close": 153.0, "adj_close": 153.0, "volume": 1000000,
+                }
+            ]
+        )
+        bronze = tmp_path / "bronze"
+        out = db.write_ticker_parquet("AAPL", sid, bronze)
+        # Read it back via DuckDB
+        rows = db.query(f"SELECT * FROM read_parquet('{out}')")
+        assert len(rows) == 1
+        assert "trade_date" in rows[0]
+        assert "symbol_id" in rows[0]
+        assert "open" in rows[0]
+        assert "volume" in rows[0]
+
+    @pytest.mark.integration
+    def test_creates_directories(self, db, tmp_path):
+        sid = db.upsert_symbol("TEST", "equity", "SMART")
+        db.insert_equities_daily(
+            [
+                {
+                    "trade_date": "2025-01-02",
+                    "symbol_id": sid,
+                    "open": 100.0, "high": 105.0, "low": 99.0,
+                    "close": 102.0, "adj_close": 102.0, "volume": 500000,
+                }
+            ]
+        )
+        deep_dir = tmp_path / "a" / "b" / "bronze"
+        result = db.write_ticker_parquet("TEST", sid, deep_dir)
+        assert result.exists()

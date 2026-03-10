@@ -17,6 +17,7 @@ import pytest
 from ib_insync import Stock
 
 from scripts.fetch_ib_historical import (
+    IB_EARLIEST_DATE,
     _cursor_path,
     _run_backfill,
     _run_normal,
@@ -24,7 +25,6 @@ from scripts.fetch_ib_historical import (
     bars_to_rows,
     clear_cursor,
     compute_date_windows,
-    export_bronze_parquet,
     fetch_all_tickers,
     fetch_ticker,
     fetch_ticker_bars,
@@ -289,29 +289,42 @@ class TestFetchTickerBars:
         assert ticker == "AAPL"
         assert len(bars) == 1
 
-    def test_empty_head_timestamp_returns_empty(self):
-        """IB returns '[]' when no head timestamp is available."""
+    def test_empty_head_timestamp_falls_back_to_ib_earliest(self):
+        """IB returns '[]' for head timestamp — fall back to IB_EARLIEST_DATE and still fetch."""
         mock_ib = MagicMock()
-        mock_ib.ib.qualifyContractsAsync = AsyncMock(return_value=[Stock("AAPL", "SMART", "USD")])
+        mock_ib.ib.qualifyContractsAsync = AsyncMock(return_value=[Stock("BND", "SMART", "USD")])
         mock_ib.get_head_timestamp_async = AsyncMock(return_value=[])
+        mock_ib.get_historical_data_async = AsyncMock(return_value=[_make_bar()])
 
         sem = asyncio.Semaphore(6)
-        ticker, bars = asyncio.run(fetch_ticker_bars("AAPL", mock_ib, sem))
 
-        assert ticker == "AAPL"
-        assert bars == []
+        with patch("scripts.fetch_ib_historical.compute_date_windows") as mock_cdw:
+            mock_cdw.return_value = [("1 Y", "20250101-00:00:00")]
+            ticker, bars = asyncio.run(fetch_ticker_bars("BND", mock_ib, sem))
 
-    def test_empty_string_head_timestamp_returns_empty(self):
-        """IB returns empty string when head timestamp is unavailable."""
+        assert ticker == "BND"
+        assert len(bars) == 1
+        # compute_date_windows must be called with IB_EARLIEST_DATE as head_dt
+        head_dt_arg = mock_cdw.call_args[0][0]
+        assert head_dt_arg == IB_EARLIEST_DATE
+
+    def test_empty_string_head_timestamp_falls_back_to_ib_earliest(self):
+        """IB returns empty string for head timestamp — fall back to IB_EARLIEST_DATE and still fetch."""
         mock_ib = MagicMock()
-        mock_ib.ib.qualifyContractsAsync = AsyncMock(return_value=[Stock("AAPL", "SMART", "USD")])
+        mock_ib.ib.qualifyContractsAsync = AsyncMock(return_value=[Stock("DVY", "SMART", "USD")])
         mock_ib.get_head_timestamp_async = AsyncMock(return_value="")
+        mock_ib.get_historical_data_async = AsyncMock(return_value=[_make_bar()])
 
         sem = asyncio.Semaphore(6)
-        ticker, bars = asyncio.run(fetch_ticker_bars("AAPL", mock_ib, sem))
 
-        assert ticker == "AAPL"
-        assert bars == []
+        with patch("scripts.fetch_ib_historical.compute_date_windows") as mock_cdw:
+            mock_cdw.return_value = [("1 Y", "20250101-00:00:00")]
+            ticker, bars = asyncio.run(fetch_ticker_bars("DVY", mock_ib, sem))
+
+        assert ticker == "DVY"
+        assert len(bars) == 1
+        head_dt_arg = mock_cdw.call_args[0][0]
+        assert head_dt_arg == IB_EARLIEST_DATE
 
     def test_empty_chunks(self):
         mock_ib = MagicMock()
@@ -598,33 +611,6 @@ class TestBackfillTicker:
         assert inserted == 0
 
 
-class TestExportBronzeParquet:
-    @pytest.mark.integration
-    def test_exports_parquet(self, db, tmp_path):
-        sid = db.upsert_symbol("AAPL", "equity", "US")
-        db.insert_equities_daily(
-            [
-                {
-                    "trade_date": "2025-01-02",
-                    "symbol_id": sid,
-                    "open": 150.0,
-                    "high": 155.0,
-                    "low": 149.0,
-                    "close": 153.0,
-                    "adj_close": 153.0,
-                    "volume": 1000000,
-                }
-            ]
-        )
-        bronze_dir = tmp_path / "bronze"
-        with patch("scripts.fetch_ib_historical.BRONZE_DIR", bronze_dir):
-            export_bronze_parquet(db)
-
-        parquet_file = bronze_dir / "equities_daily.parquet"
-        assert parquet_file.exists()
-        assert parquet_file.stat().st_size > 0
-
-
 # ══════════════════════════════════════════════════════════════════════
 # main()
 # ══════════════════════════════════════════════════════════════════════
@@ -668,8 +654,8 @@ class TestMain:
         ):
             main()
 
-        # Verify bronze Parquet written
-        assert (bronze_dir / "equities_daily.parquet").exists()
+        # Verify per-ticker Parquet written
+        assert (bronze_dir / "symbol=AAPL" / "data.parquet").exists()
         # Verify IB connect was called
         mock_ib.connect.assert_called_once()
         # Verify cursor was saved

@@ -15,9 +15,9 @@
 
     <key>StartCalendarInterval</key>
     <dict>
-        <!-- 21:05 UTC = 4:05 PM EST / 5:05 PM EDT — always after market close -->
+        <!-- 13:05 PT = 4:05 PM ET year-round (PT and ET always 3h apart) — always after market close -->
         <key>Hour</key>
-        <integer>21</integer>
+        <integer>13</integer>
         <key>Minute</key>
         <integer>5</integer>
     </dict>

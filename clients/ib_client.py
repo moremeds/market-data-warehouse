@@ -75,6 +75,11 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_GATEWAY_PORT = 4001
 DEFAULT_TWS_PORT = 7497
 
+# clientId conflict — IB Gateway holds the old ID for ~30s after a crash
+_CLIENT_ID_IN_USE = 326
+# How many consecutive clientIds to try before giving up
+_MAX_CLIENT_ID_ATTEMPTS = 10
+
 # IB error codes that are informational / non-critical
 _INFO_CODES = frozenset({
     2104,  # Market data farm connection is OK
@@ -174,32 +179,50 @@ class IBClient:
 
         self._last_host = host
         self._last_port = port
-        self._last_client_id = client_id
         self._last_timeout = timeout
 
-        attempt = 0
-        last_exc: Optional[Exception] = None
-        while attempt < max_retries:
-            attempt += 1
-            try:
-                self._ib.connect(host, port, clientId=client_id, timeout=timeout)
-                self.logger.info(
-                    "Connected to IB on %s:%s (clientId=%s)",
-                    host, port, client_id,
-                )
-                return
-            except Exception as exc:
-                last_exc = exc
+        for id_offset in range(_MAX_CLIENT_ID_ATTEMPTS):
+            current_id = client_id + id_offset
+            self._last_error = None  # clear stale errors before each attempt
+
+            attempt = 0
+            last_exc: Optional[Exception] = None
+            while attempt < max_retries:
+                attempt += 1
+                try:
+                    self._ib.connect(host, port, clientId=current_id, timeout=timeout)
+                    self._last_client_id = current_id
+                    self.logger.info(
+                        "Connected to IB on %s:%s (clientId=%s)",
+                        host, port, current_id,
+                    )
+                    return
+                except Exception as exc:
+                    last_exc = exc
+                    self.logger.warning(
+                        "Connection attempt %d/%d failed: %s",
+                        attempt, max_retries, exc,
+                    )
+                    if attempt < max_retries:
+                        time.sleep(min(attempt, 5))
+
+            # If IB reported clientId conflict, transparently try the next one
+            if self._last_error and self._last_error[0] == _CLIENT_ID_IN_USE:
                 self.logger.warning(
-                    "Connection attempt %d/%d failed: %s",
-                    attempt, max_retries, exc,
+                    "clientId %d already in use (error 326), retrying with clientId %d",
+                    current_id, current_id + 1,
                 )
-                if attempt < max_retries:
-                    time.sleep(min(attempt, 5))
+                continue
+
+            # Any other failure — stop escalating clientIds
+            raise IBConnectionError(
+                f"Failed to connect to IB on {host}:{port} after "
+                f"{max_retries} attempt(s): {last_exc}"
+            )
 
         raise IBConnectionError(
-            f"Failed to connect to IB on {host}:{port} after "
-            f"{max_retries} attempt(s): {last_exc}"
+            f"Failed to connect to IB on {host}:{port}: "
+            f"all clientIds {client_id}..{client_id + _MAX_CLIENT_ID_ATTEMPTS - 1} already in use"
         )
 
     def disconnect(self) -> None:

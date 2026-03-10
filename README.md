@@ -6,6 +6,8 @@ A local-first financial data warehouse for universe-scale market data.
 
 The project is designed to store and analyze historical **OHLCV data across equities, options, and futures** with a path from **daily bars today to intraday data later**. It uses a **partitioned Parquet data lake** as the canonical storage layer, **DuckDB** as the fast local analytical engine for research and backtesting, and **ClickHouse** as the production-oriented warehouse for large-scale aggregation, serving, and concurrency.
 
+Today, the implemented ingestion path is still Python-first and daily-equity-focused: Interactive Brokers data lands in DuckDB first, then the current scripts publish per-ticker bronze snapshots under `data-lake/bronze/asset_class=equity/symbol=<ticker>/data.parquet`. The broader staged-Parquet and multi-asset orchestration remains the target architecture, but it is not the current runtime path yet.
+
 The goal is to give you:
 
 * a **high-performance local quant research environment** on Apple Silicon
@@ -113,6 +115,12 @@ IBC automates IB Gateway startup, login, reconnection, and daily restarts — ma
 cat ~/ibc/logs/ibc-*.txt   # Current session log
 ```
 
+### IB Connection Behavior in This Repo
+
+- `IBClient.connect()` still defaults to `clientId=0`
+- If IB Gateway rejects the connection with error `326` (`client id already in use`), the client now retries successive `clientId` values automatically before giving up
+- This makes launchd- or crash-restart scenarios more resilient, but explicit `client_id` assignment is still recommended when you need stable concurrent clients
+
 ## Data Ingestion
 
 ### Prerequisites
@@ -140,6 +148,11 @@ python scripts/fetch_ib_historical.py --years 10 --port 7497 --max-concurrent 4
 python scripts/fetch_ib_historical.py --preset presets/sp500.json --backfill
 ```
 
+Current behavior:
+- Normal mode still does `delete -> insert` per ticker in DuckDB
+- After each successful ticker write, the script rewrites that ticker's bronze snapshot at `~/market-warehouse/data-lake/bronze/asset_class=equity/symbol=<ticker>/data.parquet`
+- If IB returns an empty head timestamp for a symbol, the fetcher falls back to the earliest supported IB historical date instead of skipping the symbol entirely
+
 ### Backfill Mode
 
 When tickers were initially fetched with limited history (e.g., `--years 10`), use `--backfill` to fill in older data without re-fetching everything:
@@ -152,7 +165,7 @@ Backfill mode:
 - Detects each ticker's oldest existing date in DuckDB
 - Fetches only the gap from IB inception to that oldest date
 - Inserts without deleting existing data (dedup via DB constraint)
-- Uses a separate cursor (`cursor_backfill_{name}.json`) for independent tracking
+- Uses a separate cursor JSON file (`cursor_backfill_{name}.json`) for independent tracking
 - Skips tickers not yet in DB (use normal fetch for those first)
 
 ### Auto-Restarting Runner
@@ -172,7 +185,7 @@ This script:
 
 This populates:
 - **DuckDB** `md.symbols` + `md.equities_daily`
-- **Bronze Parquet** → `~/market-warehouse/data-lake/bronze/asset_class=equity/`
+- **Bronze Parquet** → `~/market-warehouse/data-lake/bronze/asset_class=equity/symbol=<ticker>/data.parquet`
 
 ### Daily Updates
 
@@ -201,6 +214,7 @@ python scripts/daily_update.py --port 7497 --max-concurrent 4 --batch-size 25
 - Discovers tickers from DB via `DBClient.get_latest_dates()` — no hardcoded lists
 - Insert-only (dedup via unique constraint) — no delete, no data loss risk
 - Bar validation: checks OHLCV relationships, positive prices, valid trading days, duplicate dates
+- Rewrites a per-ticker bronze snapshot after each successful insert
 - Pure-Python NYSE trading calendar (no new dependencies)
 - Logs to `~/market-warehouse/logs/daily_update_YYYY-MM-DD.log`
 
@@ -212,11 +226,11 @@ sed "s|/path/to/repo|$(pwd)|g" scripts/com.market-warehouse.daily-update.plist.e
 launchctl load ~/Library/LaunchAgents/com.market-warehouse.daily-update.plist
 ```
 
-Runs at **21:05 UTC daily** (4:05 PM EST / 5:05 PM EDT) — always after market close regardless of DST. Non-trading days are harmless no-ops (the script checks `is_trading_day()` internally and exits early).
+Runs at **13:05 Pacific local time daily** (**4:05 PM Eastern year-round**) — always after market close. Non-trading days are harmless no-ops because `daily_update.py` checks `is_trading_day()` internally and exits early.
 
 ## Testing
 
-All code in `clients/` and `scripts/` must have tests. Coverage is enforced at **100%** — the build fails if any line is uncovered.
+All code in `clients/` and `scripts/` must have tests. Coverage is enforced at **100%** for the source currently included by `pyproject.toml`; `clients/ib_client.py` is still omitted from the fail-under coverage gate and covered by focused tests separately.
 
 ```bash
 source ~/market-warehouse/.venv/bin/activate
@@ -239,7 +253,7 @@ When adding new modules or scripts:
 2. Add shared fixtures to `tests/conftest.py`
 3. Mock external I/O (HTTP, file system) in unit tests
 4. Use the `tmp_duckdb` fixture for DB integration tests
-5. Run coverage and verify 100% before committing
+5. Run coverage and verify 100% for the configured coverage set before committing
 
 Test dependencies: `pytest`, `pytest-cov`, `responses`
 
@@ -309,6 +323,7 @@ The intended workflow is:
 │   │   └── asset_class=future/
 │   ├── bronze/
 │   │   ├── asset_class=equity/
+│   │   │   └── symbol=AAPL/data.parquet
 │   │   ├── asset_class=option/
 │   │   └── asset_class=future/
 │   ├── silver/
@@ -495,8 +510,10 @@ python ~/market-warehouse/scripts/write_sample_parquet.py
 This writes a small equities dataset into:
 
 ```text
-~/market-warehouse/bronze/asset_class=equity/year=2025/month=01/
+~/market-warehouse/data-lake/bronze/asset_class=equity/year=2025/month=01/
 ```
+
+That sample layout is for bootstrap/demo data. The current IB ingestion scripts write live bronze data as per-ticker snapshots under `symbol=<ticker>/data.parquet`.
 
 ## Querying sample Parquet with DuckDB
 

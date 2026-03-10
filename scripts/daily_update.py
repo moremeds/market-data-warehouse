@@ -345,26 +345,6 @@ async def fetch_batch(
     return results
 
 
-# ── Parquet export ─────────────────────────────────────────────────────
-
-
-def export_bronze_parquet(db: DBClient) -> None:
-    """Export all equities daily data to bronze Parquet."""
-    BRONZE_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = BRONZE_DIR / "equities_daily.parquet"
-    db.export_to_parquet(
-        """
-        SELECT e.trade_date, s.symbol, e.open, e.high, e.low, e.close,
-               e.adj_close, e.volume
-        FROM md.equities_daily e
-        JOIN md.symbols s ON e.symbol_id = s.symbol_id
-        ORDER BY s.symbol, e.trade_date
-        """,
-        out_path,
-    )
-    console.print(f"  Bronze Parquet: [green]{out_path}[/green]")
-
-
 # ── Preset loading ─────────────────────────────────────────────────────
 
 
@@ -531,13 +511,13 @@ def main():
                     inserted = db.insert_equities_daily(rows)
                     total_inserted += inserted
                     tickers_updated += 1
+
+                    # Write per-ticker Parquet
+                    db.write_ticker_parquet(ticker, symbol_id, BRONZE_DIR)
+
                     console.print(
                         f"  [green]{ticker}[/green]: {inserted} bar{'s' if inserted != 1 else ''} inserted"
                     )
-
-        # ── Export bronze Parquet ────────────────────────────────────
-        console.print("\n[bold]Exporting bronze Parquet...[/bold]")
-        export_bronze_parquet(db)
 
     # ── Summary ─────────────────────────────────────────────────────
     console.print(f"\n{'═' * 60}")

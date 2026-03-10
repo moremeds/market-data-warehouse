@@ -18,7 +18,6 @@ from scripts.daily_update import (
     bars_to_rows,
     classify_gaps,
     compute_ib_duration,
-    export_bronze_parquet,
     fetch_batch,
     fetch_ticker_update,
     get_nyse_holidays,
@@ -456,31 +455,6 @@ class TestFetchBatch:
 
 
 # ══════════════════════════════════════════════════════════════════════
-# export_bronze_parquet
-# ══════════════════════════════════════════════════════════════════════
-
-
-class TestExportBronzeParquet:
-    @pytest.mark.integration
-    def test_exports_parquet(self, db, tmp_path):
-        sid = db.upsert_symbol("AAPL", "equity", "US")
-        db.insert_equities_daily(
-            [
-                {
-                    "trade_date": "2025-01-02",
-                    "symbol_id": sid,
-                    "open": 150.0, "high": 155.0, "low": 149.0,
-                    "close": 153.0, "adj_close": 153.0, "volume": 1000000,
-                }
-            ]
-        )
-        bronze_dir = tmp_path / "bronze"
-        with patch("scripts.daily_update.BRONZE_DIR", bronze_dir):
-            export_bronze_parquet(db)
-        assert (bronze_dir / "equities_daily.parquet").exists()
-
-
-# ══════════════════════════════════════════════════════════════════════
 # main()
 # ══════════════════════════════════════════════════════════════════════
 
@@ -636,8 +610,8 @@ class TestMain:
         assert result[0]["cnt"] == 2
         check_db.close()
 
-        # Verify parquet was written
-        assert (bronze_dir / "equities_daily.parquet").exists()
+        # Verify per-ticker Parquet was written
+        assert (bronze_dir / "symbol=AAPL" / "data.parquet").exists()
 
     @pytest.mark.integration
     def test_no_new_bars_after_latest(self, tmp_duckdb, tmp_path, monkeypatch):

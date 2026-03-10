@@ -190,3 +190,24 @@ class DBClient:
         )
         log.info("Exported to %s", path)
         return path
+
+    def write_ticker_parquet(self, symbol: str, symbol_id: int, bronze_dir: str | Path) -> Path:
+        """Write all equities_daily rows for a ticker to a per-ticker Parquet file.
+
+        Layout: bronze_dir/symbol=AAPL/data.parquet (Hive-partitioned).
+        Returns the path written.
+        """
+        bronze_dir = Path(bronze_dir)
+        ticker_dir = bronze_dir / f"symbol={symbol}"
+        ticker_dir.mkdir(parents=True, exist_ok=True)
+        out_path = ticker_dir / "data.parquet"
+        self._conn.execute(
+            f"COPY (SELECT e.trade_date, e.symbol_id, e.open, e.high, e.low, "
+            f"e.close, e.adj_close, e.volume "
+            f"FROM md.equities_daily e "
+            f"WHERE e.symbol_id = {int(symbol_id)} "
+            f"ORDER BY e.trade_date) "
+            f"TO '{out_path}' (FORMAT PARQUET)"
+        )
+        log.info("Wrote %s", out_path)
+        return out_path

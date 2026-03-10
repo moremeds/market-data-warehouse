@@ -66,6 +66,12 @@ CURSOR_DIR = Path.home() / "market-warehouse" / "logs"
 
 MAG7 = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"]
 
+# Earliest date IB historical data API supports. Used as fallback when
+# reqHeadTimeStamp returns empty (e.g. BND, DVY — IB can serve bars but
+# won't report a head timestamp). The fetch will still retrieve all available
+# history; windows before the actual listing date simply return 0 bars.
+IB_EARLIEST_DATE = datetime(1993, 1, 29)
+
 console = Console()
 
 # ── Preset & cursor helpers ───────────────────────────────────────────
@@ -200,9 +206,12 @@ async def fetch_ticker_bars(
     else:
         head_str = str(head_ts)
         if not head_str or head_str == "[]":
-            console.print(f"    [dim]{ticker}: no head timestamp — skipping[/dim]")
-            return (ticker, [])
-        head_dt = datetime.strptime(head_str, "%Y%m%d-%H:%M:%S")
+            console.print(
+                f"    [dim]{ticker}: no head timestamp — falling back to {IB_EARLIEST_DATE:%Y-%m-%d}[/dim]"
+            )
+            head_dt = IB_EARLIEST_DATE
+        else:
+            head_dt = datetime.strptime(head_str, "%Y%m%d-%H:%M:%S")
 
     if end_dt_override is not None:
         end_dt = end_dt_override
@@ -303,7 +312,7 @@ def fetch_ticker(
     bars: list,
     db: DBClient,
 ) -> int:
-    """Persist pre-fetched bars for *ticker* into DuckDB. Returns row count."""
+    """Persist pre-fetched bars for *ticker* into DuckDB + Parquet. Returns row count."""
     if not bars:
         console.print(f"  [yellow]No bar data for {ticker}[/yellow]")
         return 0
@@ -314,6 +323,9 @@ def fetch_ticker(
     db.delete_equities_daily(symbol_id)
     rows = bars_to_rows(bars, symbol_id)
     inserted = db.insert_equities_daily(rows)
+
+    # Write per-ticker Parquet
+    db.write_ticker_parquet(ticker, symbol_id, BRONZE_DIR)
 
     return inserted
 
@@ -360,27 +372,11 @@ def backfill_ticker(ticker: str, bars: list, db: DBClient) -> int:
     symbol_id = db.upsert_symbol(ticker, "equity", "SMART")
     rows = bars_to_rows(bars, symbol_id)
     inserted = db.insert_equities_daily(rows)
+
+    # Write per-ticker Parquet (includes both old + backfilled data)
+    db.write_ticker_parquet(ticker, symbol_id, BRONZE_DIR)
+
     return inserted
-
-
-# ── Parquet export ────────────────────────────────────────────────────
-
-
-def export_bronze_parquet(db: DBClient) -> None:
-    """Export all equities daily data to bronze Parquet."""
-    BRONZE_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = BRONZE_DIR / "equities_daily.parquet"
-    db.export_to_parquet(
-        """
-        SELECT e.trade_date, s.symbol, e.open, e.high, e.low, e.close,
-               e.adj_close, e.volume
-        FROM md.equities_daily e
-        JOIN md.symbols s ON e.symbol_id = s.symbol_id
-        ORDER BY s.symbol, e.trade_date
-        """,
-        out_path,
-    )
-    console.print(f"  Bronze Parquet: [green]{out_path}[/green]")
 
 
 # ── Main ──────────────────────────────────────────────────────────────
@@ -509,10 +505,6 @@ def main():
         run_elapsed = time.monotonic() - run_t0
         console.print(f"\n{'═' * 60}")
         console.print(f"[bold]Run elapsed:[/bold] {run_elapsed:.1f}s")
-
-        # Export bronze Parquet
-        console.print("\n[bold]Exporting bronze Parquet...[/bold]")
-        export_bronze_parquet(db)
 
         # Summary
         summary = db.query(
