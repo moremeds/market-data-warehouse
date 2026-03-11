@@ -22,7 +22,7 @@ Current live shape:
 - DuckDB is a local analytical and rebuild target, not the live write path
 - Interactive Brokers is the primary source for ingestion
 - Daily syncs can recover unresolved target-day gaps for the current U.S. equity universe with a narrow external fallback chain
-- A native macOS client now lives under `macos/` with first-run setup, a Settings scene, provider-backed chat, and raw DuckDB CLI passthrough
+- A native macOS client now lives under `macos/` with first-run setup, a Settings scene, provider-backed chat, raw DuckDB CLI passthrough, and hybrid SwiftUI plus MetalKit workspace surfaces
 - The long-term direction is broader multi-asset support and future ClickHouse publishing
 
 ## Working Rules
@@ -72,6 +72,7 @@ Current live shape:
 - `scripts/daily_update.py` is the scheduled parquet-first daily sync.
 - `scripts/rebuild_duckdb_from_parquet.py` rebuilds DuckDB from bronze when a local DB file is needed.
 - `macos/scripts/build_local_macos_app.sh` builds the local app bundle at `macos/build/Market Data Warehouse.app`.
+- `macos/scripts/compile_metal_library.sh` precompiles `OperatorPilotMetalShaders.metallib` for the local app bundle; if the compiler is missing, install the optional Xcode component with `xcodebuild -downloadComponent metalToolchain`.
 - `macos/scripts/run_ui_smoke_tests.sh` is the current end-to-end macOS UI verification path and covers setup, navigation, diagnostics, provider chat, source import, and parquet preview in an isolated session.
 - Daily fallback provider order is:
   - Nasdaq historical quote API with `assetclass=stocks`

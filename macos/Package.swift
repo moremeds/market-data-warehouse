@@ -21,8 +21,13 @@ let package = Package(
             dependencies: ["MarketDataCore"]
         ),
         .target(
+            name: "OperatorPilotMetal",
+            dependencies: ["MarketDataCore"],
+            exclude: ["Shaders"]
+        ),
+        .target(
             name: "OperatorPilotKit",
-            dependencies: ["MarketDataCore", "DuckDBCLIAdapter"]
+            dependencies: ["MarketDataCore", "DuckDBCLIAdapter", "OperatorPilotMetal"]
         ),
         .executableTarget(
             name: "MarketDataWarehouseApp",
@@ -37,8 +42,12 @@ let package = Package(
             dependencies: ["DuckDBCLIAdapter", "MarketDataCore"]
         ),
         .testTarget(
+            name: "OperatorPilotMetalTests",
+            dependencies: ["OperatorPilotMetal", "MarketDataCore"]
+        ),
+        .testTarget(
             name: "OperatorPilotKitTests",
-            dependencies: ["OperatorPilotKit", "MarketDataCore", "DuckDBCLIAdapter"]
+            dependencies: ["OperatorPilotKit", "OperatorPilotMetal", "MarketDataCore", "DuckDBCLIAdapter"]
         ),
     ]
 )

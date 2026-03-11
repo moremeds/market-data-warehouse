@@ -221,7 +221,7 @@ log_step "Running raw DuckDB command through composer"
 send_shortcut "l" "command"
 type_text "/duckdb --help"
 send_key_code 36
-wait_for_text "OPTIONS include:" 30
+wait_for_text "DuckDB CLI Result" 30
 
 log_step "Running provider-backed chat"
 send_shortcut "l" "command"

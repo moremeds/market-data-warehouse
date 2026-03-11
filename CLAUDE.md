@@ -69,8 +69,10 @@ market-data-warehouse/              # Git repo
 - The native client lives under `macos/` as a repo-local Swift package that Xcode can open directly.
 - The selected initial direction is `Option 3: Operator Pilot`.
 - First launch is gated by setup until a default chat provider is configured.
+- The app now uses a hybrid SwiftUI plus MetalKit architecture: native shell controls plus `MTKView`-backed workspace panels.
 - The app exposes a standard macOS Settings scene, command-key navigation, provider-backed chat through local `claude`, `codex`, or `gemini` CLIs, and raw DuckDB CLI passthrough via `/duckdb ...` plus the diagnostics drawer.
-- Local testing paths include `macos/scripts/build_local_macos_app.sh`, `macos/scripts/build_local_launcher.sh`, and the Finder launcher under `macos/launcher/`.
+- Local testing paths include `macos/scripts/build_local_macos_app.sh`, `macos/scripts/build_local_launcher.sh`, `macos/scripts/compile_metal_library.sh`, and the Finder launcher under `macos/launcher/`.
+- If the local Metal compiler is missing, install the optional Xcode component with `xcodebuild -downloadComponent metalToolchain`.
 
 ## DuckDB Schema
 

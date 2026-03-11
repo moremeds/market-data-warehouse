@@ -12,6 +12,8 @@ MACOS_CONTENTS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 PLIST_PATH="$CONTENTS_DIR/Info.plist"
 EXECUTABLE_NAME="MarketDataWarehouseApp"
+METAL_SOURCE="$MACOS_DIR/Sources/OperatorPilotMetal/Shaders/OperatorPilotMetalShaders.metal"
+METAL_LIBRARY_PATH="$RESOURCES_DIR/OperatorPilotMetalShaders.metallib"
 
 export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin:/Applications/Xcode.app/Contents/Developer/usr/bin:${PATH:-}"
 
@@ -29,6 +31,12 @@ fi
 /bin/mkdir -p "$MACOS_CONTENTS_DIR" "$RESOURCES_DIR"
 /bin/cp "$APP_BINARY" "$MACOS_CONTENTS_DIR/$EXECUTABLE_NAME"
 /bin/chmod +x "$MACOS_CONTENTS_DIR/$EXECUTABLE_NAME"
+
+if [[ -f "$METAL_SOURCE" ]]; then
+  if ! "$SCRIPT_DIR/compile_metal_library.sh" "$METAL_SOURCE" "$METAL_LIBRARY_PATH" >/dev/null 2>&1; then
+    print -u2 -- "Warning: failed to precompile Metal shaders; the app will fall back to runtime shader compilation."
+  fi
+fi
 
 /usr/bin/plutil -create xml1 "$PLIST_PATH"
 /usr/bin/plutil -replace CFBundleDevelopmentRegion -string "en" "$PLIST_PATH"

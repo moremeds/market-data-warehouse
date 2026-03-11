@@ -31,6 +31,18 @@ public struct SetupFlowView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                MetalStatusPanel(
+                    snapshot: viewModel.metalSnapshot,
+                    eyebrow: "Metal First Run",
+                    title: isInitialLaunch ? "GPU-backed workspace shell" : "Reconfigure the renderer-aware workspace",
+                    subtitle: "Traditional form controls remain native SwiftUI, while the live workspace visual layer now runs through MetalKit.",
+                    metrics: [
+                        "Provider: \(selectedProvider.displayName)",
+                        "Auth: \(authMode.displayName)",
+                        customModel.isEmpty ? "Model: default" : "Model: \(customModel)",
+                    ]
+                )
+
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Default provider")
                         .font(.headline)
@@ -146,6 +158,18 @@ public struct SettingsPaneView: View {
             VStack(alignment: .leading, spacing: 20) {
                 Text("Settings")
                     .font(.largeTitle.weight(.semibold))
+
+                MetalStatusPanel(
+                    snapshot: viewModel.metalSnapshot,
+                    eyebrow: "Metal Settings",
+                    title: "Tune the workspace without leaving the GPU path",
+                    subtitle: "Provider selection and secret management stay native, while visual state changes trigger demand-driven Metal redraws.",
+                    metrics: [
+                        "Default: \(viewModel.selectedProvider.displayName)",
+                        "\(viewModel.sources.count) imported source\(viewModel.sources.count == 1 ? "" : "s")",
+                        viewModel.isRunning ? "Animating" : "Paused until change",
+                    ]
+                )
 
                 Picker("Default provider", selection: Binding(
                     get: { viewModel.selectedProvider },

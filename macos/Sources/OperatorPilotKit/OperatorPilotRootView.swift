@@ -159,17 +159,12 @@ public struct OperatorPilotRootView: View {
     }
 
     private var heroCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Chat with your workspace")
-                .font(.title2.weight(.semibold))
-            Text("Default provider: \(viewModel.selectedProvider.displayName). Open a parquet or DuckDB source for direct query help, or ask broader questions and the selected provider CLI will respond.")
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(.quaternary.opacity(0.25))
+        MetalStatusPanel(
+            snapshot: viewModel.metalSnapshot,
+            eyebrow: "Metal Workspace",
+            title: "Chat with your workspace",
+            subtitle: "Default provider: \(viewModel.selectedProvider.displayName). Open a parquet or DuckDB source for direct query help, or ask broader questions and the selected provider CLI will respond.",
+            metrics: assistantMetrics
         )
     }
 
@@ -235,6 +230,14 @@ public struct OperatorPilotRootView: View {
                 Text("The current session is persisted locally and restored on the next launch.")
                     .foregroundStyle(.secondary)
 
+                MetalStatusPanel(
+                    snapshot: viewModel.metalSnapshot,
+                    eyebrow: "Session Playback",
+                    title: "Transcript density at a glance",
+                    subtitle: "The Metal surface below is redrawn on demand and shifts into timed updates only while work is actively running.",
+                    metrics: transcriptMetrics
+                )
+
                 ForEach(viewModel.transcript) { item in
                     TranscriptItemView(item: item)
                 }
@@ -261,6 +264,37 @@ public struct OperatorPilotRootView: View {
             .lowercased()
             .replacingOccurrences(of: " ", with: "-")
         return "prompt-chip-\(normalized)"
+    }
+
+    private var assistantMetrics: [String] {
+        var metrics = [
+            "\(viewModel.sources.count) source\(viewModel.sources.count == 1 ? "" : "s")",
+            "\(viewModel.transcript.count) message\(viewModel.transcript.count == 1 ? "" : "s")",
+        ]
+
+        if let source = viewModel.selectedSource {
+            metrics.append(source.kind == .parquet ? "Parquet attached" : "DuckDB attached")
+        } else {
+            metrics.append("No source selected")
+        }
+
+        metrics.append(viewModel.isRunning ? "Live GPU redraw" : "Demand-driven redraw")
+        return metrics
+    }
+
+    private var transcriptMetrics: [String] {
+        let commandMetric: String
+        if let lastExecution = viewModel.lastExecution {
+            commandMetric = lastExecution.exitCode == 0 ? "Last command succeeded" : "Last command failed"
+        } else {
+            commandMetric = "No command yet"
+        }
+
+        return [
+            viewModel.isRunning ? "Command running" : "Idle",
+            "\(viewModel.transcript.count) archived item\(viewModel.transcript.count == 1 ? "" : "s")",
+            commandMetric,
+        ]
     }
 }
 
@@ -324,6 +358,18 @@ private struct SetupSummaryView: View {
                     .font(.title2.weight(.semibold))
                 Text("The first-run setup decides which provider the app uses by default and whether that provider should run through the local CLI session or a Keychain-stored API key.")
                     .foregroundStyle(.secondary)
+
+                MetalStatusPanel(
+                    snapshot: viewModel.metalSnapshot,
+                    eyebrow: "Render State",
+                    title: "Hybrid Metal setup preview",
+                    subtitle: "The app keeps configuration controls in SwiftUI while using MetalKit surfaces for dense visual feedback and execution state.",
+                    metrics: [
+                        "Default: \(viewModel.selectedProvider.displayName)",
+                        viewModel.isSetupFlowPresented ? "Setup sheet open" : "Setup sheet closed",
+                        "\(viewModel.providerStatuses.count) providers tracked",
+                    ]
+                )
 
                 GroupBox("Current Configuration") {
                     VStack(alignment: .leading, spacing: 8) {

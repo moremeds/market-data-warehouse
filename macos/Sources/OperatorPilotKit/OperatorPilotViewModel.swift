@@ -93,6 +93,59 @@ public final class OperatorPilotViewModel: ObservableObject {
         settings.defaultProvider
     }
 
+    public var metalSnapshot: MetalWorkspaceSnapshot {
+        let destination: MetalWorkspaceDestination
+        switch selectedDestination ?? .assistant {
+        case .assistant:
+            destination = .assistant
+        case .transcripts:
+            destination = .transcripts
+        case .setup:
+            destination = .setup
+        case .settings:
+            destination = .settings
+        }
+
+        let executionState: MetalExecutionState
+        if let lastExecution {
+            executionState = lastExecution.exitCode == 0 ? .success : .failure
+        } else {
+            executionState = .idle
+        }
+
+        let commandDurationMilliseconds: Double
+        let commandOutputBytes: Int
+        if let lastExecution {
+            commandDurationMilliseconds = max(
+                0,
+                lastExecution.endedAt.timeIntervalSince(lastExecution.startedAt) * 1000
+            )
+            commandOutputBytes = lastExecution.stdout.utf8.count + lastExecution.stderr.utf8.count
+        } else {
+            commandDurationMilliseconds = 0
+            commandOutputBytes = 0
+        }
+
+        let providerReadiness = providerStatuses.reduce(into: 0) { count, status in
+            if status.cliInstalled || status.apiKeyPresent || status.environmentKeyPresent {
+                count += 1
+            }
+        }
+
+        return MetalWorkspaceSnapshot(
+            destination: destination,
+            provider: selectedProvider,
+            sourceKind: selectedSource?.kind,
+            sourceCount: sources.count,
+            transcriptCount: transcript.count,
+            providerReadiness: providerReadiness,
+            executionState: executionState,
+            commandDurationMilliseconds: commandDurationMilliseconds,
+            commandOutputBytes: commandOutputBytes,
+            isRunning: isRunning
+        )
+    }
+
     public func preference(for provider: ProviderKind) -> ProviderPreference {
         settings.preference(for: provider)
     }

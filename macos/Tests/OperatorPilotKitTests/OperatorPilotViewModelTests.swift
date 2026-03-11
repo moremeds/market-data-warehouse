@@ -187,4 +187,51 @@ final class OperatorPilotViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.transcript.last?.body, "Restored conversation")
         XCTAssertFalse(viewModel.isSetupFlowPresented)
     }
+
+    func testMetalSnapshotTracksDestinationAndProviderReadiness() {
+        let secretStore = MemorySecretStore(keys: [.gemini: "gem-key"])
+        let viewModel = OperatorPilotViewModel(
+            executor: nil,
+            chatResponder: MockChatResponder(response: .init(provider: .claude, text: "ignored")),
+            sessionStore: MemorySessionStore(snapshot: .init(settings: AppSettings(hasCompletedSetup: true), sources: [], selectedSourceID: nil, transcript: [])),
+            secretStore: secretStore,
+            environment: [
+                "PATH": "/tooling:/bin",
+            ]
+        )
+
+        viewModel.selectedDestination = .settings
+
+        XCTAssertEqual(viewModel.metalSnapshot.destination, .settings)
+        XCTAssertEqual(viewModel.metalSnapshot.providerReadiness, 1)
+        XCTAssertEqual(viewModel.metalSnapshot.executionState, .idle)
+    }
+
+    func testMetalSnapshotReflectsSelectedSourceAndExecutionOutcome() async {
+        let result = DuckDBExecutionResult(
+            binaryPath: "/opt/homebrew/bin/duckdb",
+            arguments: [":memory:", "-table", "-c", "SELECT 1;"],
+            sql: "SELECT 1;",
+            stdout: "answer\n1\n",
+            stderr: "",
+            exitCode: 0,
+            startedAt: Date(),
+            endedAt: Date()
+        )
+
+        let viewModel = OperatorPilotViewModel(
+            executor: MockExecutor(result: result),
+            chatResponder: MockChatResponder(response: .init(provider: .claude, text: "ignored")),
+            sessionStore: MemorySessionStore(snapshot: .init(settings: AppSettings(hasCompletedSetup: true), sources: [], selectedSourceID: nil, transcript: [])),
+            secretStore: MemorySecretStore(),
+            environment: ["PATH": "/bin"]
+        )
+        viewModel.importSource(url: URL(fileURLWithPath: "/tmp/prices.parquet"))
+
+        await viewModel.triggerPrompt("Preview this parquet file")
+
+        XCTAssertEqual(viewModel.metalSnapshot.sourceKind, .parquet)
+        XCTAssertEqual(viewModel.metalSnapshot.executionState, .success)
+        XCTAssertGreaterThanOrEqual(viewModel.metalSnapshot.transcriptCount, 1)
+    }
 }

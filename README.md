@@ -38,6 +38,7 @@ Current live app behavior:
 * provider-backed chat runs through the installed local `claude`, `codex`, or `gemini` CLI, with Keychain-stored API keys as fallback
 * raw DuckDB CLI passthrough is available in chat via `/duckdb ...` and in the diagnostics drawer
 * session state persists across relaunches, including sources, settings, and transcripts
+* the native client now uses a hybrid SwiftUI plus MetalKit rendering model for its workspace surfaces
 * command-key navigation is wired for the main destinations and app controls
 
 Build, test, and open the native client locally:
@@ -49,6 +50,12 @@ swift test
 ./scripts/run_ui_smoke_tests.sh
 ./scripts/build_local_macos_app.sh
 open "build/Market Data Warehouse.app"
+```
+
+If the local Metal compiler is missing, install the Xcode component once:
+
+```bash
+xcodebuild -downloadComponent metalToolchain
 ```
 
 For Finder-based local testing without Terminal, generate the launcher once:

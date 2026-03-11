@@ -19,6 +19,7 @@ This directory now contains the runnable native macOS client for this repo, plus
 - API keys can be stored per provider in Keychain and are used as a fallback when local subscription auth is unavailable.
 - Session state persists locally, including settings, transcript history, imported sources, and the selected source.
 - Raw DuckDB CLI passthrough is available from chat with `/duckdb ...` and from the diagnostics drawer.
+- The workspace now uses a hybrid SwiftUI plus MetalKit architecture, with Metal-backed status panels rendered through `MTKView`.
 - Standard macOS commands are wired for opening sources and rerunning setup without leaving the app shell.
 - Source-aware prompt planning still supports direct SQL execution for local `.parquet`, `.duckdb`, and `.db` files.
 
@@ -36,6 +37,10 @@ This directory now contains the runnable native macOS client for this repo, plus
   Shared architecture and testing guardrails that all three designs depend on
 - `docs/subscription-oauth-debug-reference.md`
   Working auth reference captured from the user-provided OAuth flow plus local CLI observations
+- `docs/metal-replatform.md`
+  Repo-specific Metal architecture, build rules, and downloaded references
+- `docs/metal-best-practices.md`
+  Condensed Apple-source guidance for the current hybrid SwiftUI plus MetalKit approach
 - `docs/design-comparison.md`
   Comparison matrix and recommendation across the three concepts
 - `designs/option-1-navigator-console.md`
@@ -55,6 +60,33 @@ swift test
 ```
 
 `run_ui_smoke_tests.sh` launches an isolated app session, drives the UI with keyboard shortcuts, and verifies visible states with OCR on the app window. The smoke flow covers first-run setup, navigation, rerunning setup from Settings, diagnostics, raw DuckDB CLI execution, provider-backed chat, source import, and parquet preview.
+
+## Metal Replatform
+
+The live app now uses a hybrid rendering model:
+
+- SwiftUI for the desktop shell, forms, transcript text, menus, and settings controls
+- MetalKit for the dense visual status surfaces embedded in the workspace
+
+That architecture is deliberate. For a macOS productivity app, a permanent full-screen game-style renderer is usually the wrong tradeoff. The current implementation keeps `MTKView` paused until state changes, then temporarily unpauses it only while work is actively running.
+
+References for the current Metal work:
+
+- `docs/metal-replatform.md`
+- `docs/metal-best-practices.md`
+- `vendor/apple/Metal-Feature-Set-Tables.pdf`
+- `vendor/metal-guide/README.md`
+
+If the Metal compiler is not available locally, install the optional Xcode component once:
+
+```bash
+xcodebuild -downloadComponent metalToolchain
+```
+
+The app-bundle build script now precompiles `OperatorPilotMetalShaders.metallib` with:
+
+- `scripts/compile_metal_library.sh`
+- `scripts/build_local_macos_app.sh`
 
 To open the app bundle that Finder and the launcher use:
 

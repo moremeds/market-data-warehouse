@@ -9,3 +9,4 @@
 - When a user rephrases a packaging request, restate the exact artifact they want to run before implementing helpers so we build the app/runtime path they actually need instead of a nearby convenience wrapper.
 - When a macOS sidebar must be reliably clickable, prefer explicit button or navigation-link rows over implicit `List(selection:)` tagging so interaction is obvious and testable.
 - When asked to update “all docs,” explicitly sweep root operator docs, local feature docs, and agent-facing guides together instead of assuming the README alone is enough.
+- Do not run the macOS UI smoke harness unless the user explicitly asks for UI automation or smoke verification in that turn; default to build plus unit-test verification for ongoing implementation work.
