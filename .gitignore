@@ -17,3 +17,8 @@ htmlcov/
 
 # User-specific launchd plist (contains absolute paths)
 scripts/com.market-warehouse.daily-update.plist
+
+# Local macOS launcher artifacts
+macos/.build/
+macos/launcher/*.app/
+macos/logs/

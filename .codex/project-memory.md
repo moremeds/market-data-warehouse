@@ -28,6 +28,10 @@ Use this file for:
 - Preferred IBC startup on macOS is the machine-local secure service installed by `scripts/install_ibc_secure_service.py`, which writes wrappers under `~/ibc/bin`, a LaunchAgent under `~/Library/LaunchAgents/local.ibc-gateway.plist`, and renders a temporary runtime config from `~/ibc/config.secure.ini` plus Keychain secrets instead of storing IB credentials in plaintext config.
 - For this repo, the secure IBC service is a required machine-local dependency for IB-backed workflows, but the service itself is global to the user's Mac rather than scoped to this repo.
 - `symbol_id` for new symbols is a stable 53-bit `blake2b(symbol)`-derived value.
+- The native macOS client work now lives under `macos/` as a repo-local Swift package that Xcode can open directly.
+- The selected initial macOS UI direction is `Option 3: Operator Pilot`.
+- The current macOS client includes first-run setup, a Settings scene, local session restore, provider-backed chat through installed CLIs, and raw DuckDB CLI passthrough via `/duckdb ...` plus the diagnostics drawer.
+- The macOS client now has a repo-local UI smoke harness at `macos/scripts/run_ui_smoke_tests.sh` that drives the built app through keyboard shortcuts and validates visible window text via OCR in an isolated throwaway session.
 
 ## Durable Workflow Rules
 

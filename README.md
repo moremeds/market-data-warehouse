@@ -27,6 +27,46 @@ In one sentence:
 
 **It’s a local-first, production-ready market data warehouse for serious quantitative research and analytics.**
 
+## Native macOS Client
+
+A native macOS client now ships in [`macos/`](macos/) as a repo-local Swift package that Xcode can open directly. The current implementation follows the selected `Option 3: Operator Pilot` direction and is built for local parquet and DuckDB exploration inside a chat-first desktop shell.
+
+Current live app behavior:
+
+* first launch is gated by setup until a default provider is configured
+* a native Settings scene is available both in-app and through standard macOS Settings
+* provider-backed chat runs through the installed local `claude`, `codex`, or `gemini` CLI, with Keychain-stored API keys as fallback
+* raw DuckDB CLI passthrough is available in chat via `/duckdb ...` and in the diagnostics drawer
+* session state persists across relaunches, including sources, settings, and transcripts
+* command-key navigation is wired for the main destinations and app controls
+
+Build, test, and open the native client locally:
+
+```bash
+cd macos
+swift build
+swift test
+./scripts/run_ui_smoke_tests.sh
+./scripts/build_local_macos_app.sh
+open "build/Market Data Warehouse.app"
+```
+
+For Finder-based local testing without Terminal, generate the launcher once:
+
+```bash
+cd macos
+./scripts/build_local_launcher.sh
+open "launcher/Launch Market Data Warehouse.app"
+```
+
+Primary keyboard commands:
+
+* `Cmd-O` open a parquet, DuckDB, or SQLite source
+* `Cmd-Shift-R` rerun setup
+* `Cmd-Shift-D` toggle the diagnostics drawer
+* `Cmd-L` focus the chat composer
+* `Cmd-1` through `Cmd-4` switch between Assistant, Transcripts, Setup, and Settings
+
 ## Dependencies
 
 - **Python 3.12+** — [python.org](https://www.python.org/downloads/) or `brew install python@3.12`
@@ -325,6 +365,14 @@ python -m pytest tests/ -v -m "not integration"
 
 # Keep coroutine leaks from mocked async runners from slipping back in
 python -m pytest tests/ -v -W error::RuntimeWarning
+```
+
+For native macOS work, also run:
+
+```bash
+cd macos
+swift test
+./scripts/run_ui_smoke_tests.sh
 ```
 
 ### Adding new code

@@ -6,3 +6,6 @@
 - When a user corrects an operational assumption like a live database lock, re-check the actual process and file state immediately before continuing so recovery work is based on current runtime conditions rather than stale observations.
 - When turning a one-off recovery into a productized fallback path, scope the provider chain to the repo's actual universe and calendar model instead of assuming one exchange-specific source is sufficient.
 - When promoting a globally installed machine service, keep the launchd label scoped to the service itself rather than the repo or an old application name.
+- When a user rephrases a packaging request, restate the exact artifact they want to run before implementing helpers so we build the app/runtime path they actually need instead of a nearby convenience wrapper.
+- When a macOS sidebar must be reliably clickable, prefer explicit button or navigation-link rows over implicit `List(selection:)` tagging so interaction is obvious and testable.
+- When asked to update “all docs,” explicitly sweep root operator docs, local feature docs, and agent-facing guides together instead of assuming the README alone is enough.
