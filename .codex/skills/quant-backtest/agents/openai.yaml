@@ -1,0 +1,4 @@
+interface:
+  display_name: "Quant Backtest"
+  short_description: "Institutional-grade Python backtesting framework builder"
+  default_prompt: "Use $quant-backtest to build, extend, or debug a systematic trading backtest with realistic costs, risk metrics, and look-ahead protections."
