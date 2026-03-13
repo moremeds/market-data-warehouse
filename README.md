@@ -350,6 +350,59 @@ python scripts/rebuild_duckdb_from_parquet.py
 
 This rebuilds `~/market-warehouse/duckdb/market.duckdb` from the canonical bronze parquet tree using set-based `INSERT INTO ... SELECT FROM read_parquet(...)`. The rebuild path recreates the analytical tables from scratch on each run, so it is safe to rerun against an existing DuckDB file.
 
+## Breadth Strategy
+
+The repo now includes a generic breadth strategy entry point at `strategies/breadth_washout.py`.
+
+Supported universe selectors:
+- `--universe ndx100`
+- `--universe sp500`
+- `--universe r2k`
+- `--universe all-stocks`
+- `--preset /path/to/preset.json`
+- `--tickers AAPL MSFT NVDA`
+
+Supported signal modes:
+- `--signal-mode oversold`
+- `--signal-mode overbought`
+
+Default thresholds:
+- `oversold` defaults to `65`
+- `overbought` defaults to `70`
+
+Examples:
+
+```bash
+source ~/market-warehouse/.venv/bin/activate
+
+# Oversold breadth on the S&P 500 preset
+python strategies/breadth_washout.py \
+  --universe sp500 \
+  --signal-mode oversold \
+  --assets QQQ TQQQ \
+  --end-date 2026-03-11
+
+# Overbought breadth on all discovered local symbols
+python strategies/breadth_washout.py \
+  --universe all-stocks \
+  --signal-mode overbought \
+  --assets QQQ TQQQ \
+  --end-date 2026-03-11
+
+# Custom ticker basket with an explicit threshold
+python strategies/breadth_washout.py \
+  --tickers AAPL MSFT NVDA \
+  --signal-mode overbought \
+  --threshold 70 \
+  --assets QQQ TQQQ \
+  --universe-label mega-cap-ai
+```
+
+Notes:
+- Official point-in-time membership is implemented only for `ndx100`.
+- Other universes currently run as static baskets derived from presets, explicit tickers, or the discovered bronze symbol set.
+- `--min-pct-below` remains as a backward-compatible oversold alias, but new runs should prefer `--signal-mode` plus `--threshold`.
+
 ### Scheduling with launchd (macOS)
 
 ```bash

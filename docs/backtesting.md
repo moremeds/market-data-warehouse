@@ -1,5 +1,10 @@
 # Quant Backtesting Framework in Python
 
+Repo note:
+- The live breadth strategy entry point in this repo is `strategies/breadth_washout.py`.
+- It supports `oversold` and `overbought` trigger modes across named universes, custom presets, explicit ticker lists, and `all-stocks`.
+- Official point-in-time membership is currently implemented only for `ndx100`; the other supported universes run as static baskets.
+
 Prompt:
 
 Role: Lead Quantitative Software Architect

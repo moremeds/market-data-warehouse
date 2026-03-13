@@ -30,6 +30,10 @@ market-data-warehouse/              # Git repo
 │   ├── com.market-warehouse.daily-update.plist.example  # macOS launchd template
 │   ├── com.market-warehouse.daily-update-watchdog.plist.example # macOS launchd watchdog template
 │   └── pre-commit-secrets-scan.sh  # Pre-commit hook: secrets scanner
+├── strategies/
+│   ├── breadth_washout.py          # Generic breadth signal strategy across presets, tickers, or all stocks
+│   ├── ndx100_breadth_washout.py   # Compatibility wrapper for the generic breadth strategy
+│   └── ndx100_sma_breadth.py       # Breadth-analysis helpers and NDX-focused utilities
 ├── tests/
 │   ├── conftest.py                 # Shared fixtures: tmp_duckdb, db
 │   ├── test_daily_bar_fallback.py  # Unit tests for fallback providers
@@ -70,6 +74,14 @@ market-data-warehouse/              # Git repo
 - **DuckDB** is the local query engine for research and backtesting
 - **ClickHouse** is optional, for production-style benchmarking and concurrency testing
 - **Python env** lives at `~/market-warehouse/.venv/` — activate with `source ~/market-warehouse/.venv/bin/activate`
+
+## Breadth Strategy
+
+- The live generic breadth strategy entry point is `strategies/breadth_washout.py`.
+- It supports `oversold` and `overbought` signal modes plus universe selection by named universe, custom preset, explicit ticker list, or `all-stocks`.
+- Current named universes are `ndx100`, `sp500`, `r2k`, and `all-stocks`.
+- Official point-in-time membership is only implemented for `ndx100`; other universes currently run as static baskets.
+- Output filenames include both signal mode and threshold so separate runs do not overwrite each other.
 
 ## Native macOS Client
 
