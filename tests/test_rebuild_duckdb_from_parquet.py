@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -137,3 +138,57 @@ class TestRebuildDuckDBFromParquet:
 
         with pytest.raises(FileNotFoundError, match="no bronze parquet snapshots found"):
             main()
+
+    @pytest.mark.integration
+    def test_asset_class_volatility(self, tmp_path, monkeypatch):
+        """--asset-class volatility uses CBOE venue and derives bronze dir."""
+        data_lake = tmp_path / "data-lake"
+        vol_bronze = data_lake / "bronze" / "asset_class=volatility"
+        db_path = tmp_path / "rebuilt.duckdb"
+
+        with BronzeClient(bronze_dir=vol_bronze) as bronze:
+            vix_id = bronze.get_symbol_id("VIX")
+            bronze.replace_ticker_rows("VIX", [_row("2025-01-02", vix_id, 19.0)])
+
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "rebuild_duckdb_from_parquet.py",
+                "--asset-class", "volatility",
+                "--db-path", str(db_path),
+            ],
+        )
+
+        with patch("scripts.rebuild_duckdb_from_parquet.DATA_LAKE", data_lake):
+            main()
+
+        with DBClient(db_path=db_path) as db:
+            symbols = db.query("SELECT * FROM md.symbols WHERE symbol = 'VIX'")
+            assert symbols[0]["asset_class"] == "volatility"
+            assert symbols[0]["venue"] == "CBOE"
+            assert db.get_latest_dates() == {"VIX": "2025-01-02"}
+
+    @pytest.mark.integration
+    def test_default_bronze_dir_derived_from_asset_class(self, tmp_path, monkeypatch):
+        """When --bronze-dir is not specified, it is derived from --asset-class."""
+        data_lake = tmp_path / "data-lake"
+        eq_bronze = data_lake / "bronze" / "asset_class=equity"
+        db_path = tmp_path / "rebuilt.duckdb"
+
+        with BronzeClient(bronze_dir=eq_bronze) as bronze:
+            aapl_id = bronze.get_symbol_id("AAPL")
+            bronze.replace_ticker_rows("AAPL", [_row("2025-01-02", aapl_id, 150.0)])
+
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "rebuild_duckdb_from_parquet.py",
+                "--db-path", str(db_path),
+            ],
+        )
+
+        with patch("scripts.rebuild_duckdb_from_parquet.DATA_LAKE", data_lake):
+            main()
+
+        with DBClient(db_path=db_path) as db:
+            assert db.get_latest_dates() == {"AAPL": "2025-01-02"}

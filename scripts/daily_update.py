@@ -38,7 +38,7 @@ import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from ib_insync import Stock
+from ib_insync import Index, Stock
 from rich.console import Console
 from rich.logging import RichHandler
 
@@ -81,6 +81,14 @@ DATA_LAKE = Path.home() / "market-warehouse" / "data-lake"
 BRONZE_DIR = DATA_LAKE / "bronze" / "asset_class=equity"
 
 console = Console()
+
+
+def _make_contract(ticker: str, asset_class: str = "equity"):
+    """Build an IB contract for the given *ticker* and *asset_class*."""
+    if asset_class == "volatility":
+        return Index(ticker, "CBOE", "USD")
+    return Stock(ticker, "SMART", "USD")
+
 
 # ── Trading calendar ───────────────────────────────────────────────────
 
@@ -369,12 +377,13 @@ async def fetch_ticker_update(
     duration: str,
     ib: IBClient,
     semaphore: asyncio.Semaphore,
+    asset_class: str = "equity",
 ) -> tuple[str, list]:
     """Fetch daily bars for *ticker* with the given *duration*.
 
     Returns ``(ticker, bars)``.
     """
-    contract = Stock(ticker, "SMART", "USD")
+    contract = _make_contract(ticker, asset_class)
     async with semaphore:
         await ib.ib.qualifyContractsAsync(contract)
         bars = await ib.get_historical_data_async(
@@ -390,6 +399,7 @@ async def fetch_batch(
     tickers_with_durations: list[tuple[str, str]],
     ib: IBClient,
     max_concurrent: int = 6,
+    asset_class: str = "equity",
 ) -> dict[str, list]:
     """Fetch bars for a batch of tickers. Returns ``{ticker: bars}``."""
     semaphore = asyncio.Semaphore(max_concurrent)
@@ -397,7 +407,7 @@ async def fetch_batch(
 
     async def _safe_fetch(ticker: str, duration: str) -> tuple[str, list]:
         try:
-            return await fetch_ticker_update(ticker, duration, ib, semaphore)
+            return await fetch_ticker_update(ticker, duration, ib, semaphore, asset_class=asset_class)
         except (IBError, Exception) as exc:
             console.print(f"    [red]{ticker}: {type(exc).__name__} — {exc}[/red]")
             return (ticker, [])
@@ -475,6 +485,12 @@ def main():
         default=None,
         help="Override the target trading date in YYYY-MM-DD format",
     )
+    parser.add_argument(
+        "--asset-class",
+        choices=["equity", "volatility"],
+        default="equity",
+        help="Asset class to update (default: equity). Use 'volatility' for CBOE volatility indices.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -490,7 +506,10 @@ def main():
     if target is None:
         return
 
-    console.print(f"\n[bold]Daily Update[/bold]  target_date={target}  force={args.force}")
+    asset_class = args.asset_class
+    bronze_dir = DATA_LAKE / "bronze" / f"asset_class={asset_class}"
+
+    console.print(f"\n[bold]Daily Update[/bold]  target_date={target}  force={args.force}  asset_class={asset_class}")
 
     # ── Load preset filter (if any) ─────────────────────────────────
     preset_tickers: set[str] | None = None
@@ -500,7 +519,7 @@ def main():
         console.print(f"[bold]Preset:[/bold] {preset_name} ({len(preset_tickers)} tickers)")
 
     # ── Gap detection ───────────────────────────────────────────────
-    with _storage_client()(bronze_dir=BRONZE_DIR) as bronze:
+    with _storage_client()(bronze_dir=bronze_dir) as bronze:
         latest_dates = bronze.get_latest_dates()
 
         if not latest_dates:
@@ -569,7 +588,8 @@ def main():
                 )
 
                 ticker_bars = ib.ib.run(
-                    fetch_batch(batch, ib, max_concurrent=args.max_concurrent)
+                    fetch_batch(batch, ib, max_concurrent=args.max_concurrent,
+                                asset_class=asset_class)
                 )
 
                 for ticker, duration in batch:
@@ -586,25 +606,27 @@ def main():
                         if latest < date.fromisoformat(str(b.date)) <= target
                     ]
 
-                    missing_dates = get_missing_trading_dates(latest, target, valid_bars)
-                    fallback_attempts += len(missing_dates)
-                    fallback_bars, fallback_sources = fetch_fallback_bars(
-                        ticker, missing_dates, fallback,
-                    )
-                    if fallback_bars:
-                        recovered_bars, fallback_issues = validate_bars(fallback_bars, ticker)
-                        total_issues.extend(fallback_issues)
-                        total_validated += len(fallback_bars)
-                        if recovered_bars:
-                            valid_bars.extend(recovered_bars)
-                            fallback_successes += len(recovered_bars)
-                            fallback_symbols += 1
-                            console.print(
-                                f"  [cyan]{ticker}[/cyan]: recovered "
-                                f"{len(recovered_bars)} missing trading day"
-                                f"{'s' if len(recovered_bars) != 1 else ''} via "
-                                f"{', '.join(sorted(set(fallback_sources)))}"
-                            )
+                    # Fallback recovery (equity only — Nasdaq/Stooq don't cover indices)
+                    if asset_class == "equity":
+                        missing_dates = get_missing_trading_dates(latest, target, valid_bars)
+                        fallback_attempts += len(missing_dates)
+                        fallback_bars, fallback_sources = fetch_fallback_bars(
+                            ticker, missing_dates, fallback,
+                        )
+                        if fallback_bars:
+                            recovered_bars, fallback_issues = validate_bars(fallback_bars, ticker)
+                            total_issues.extend(fallback_issues)
+                            total_validated += len(fallback_bars)
+                            if recovered_bars:
+                                valid_bars.extend(recovered_bars)
+                                fallback_successes += len(recovered_bars)
+                                fallback_symbols += 1
+                                console.print(
+                                    f"  [cyan]{ticker}[/cyan]: recovered "
+                                    f"{len(recovered_bars)} missing trading day"
+                                    f"{'s' if len(recovered_bars) != 1 else ''} via "
+                                    f"{', '.join(sorted(set(fallback_sources)))}"
+                                )
 
                     if not valid_bars:
                         if bars:
@@ -622,7 +644,7 @@ def main():
                     rows = bars_to_rows(valid_bars, symbol_id)
                     inserted = bronze.merge_ticker_rows(ticker, rows)
                     if hasattr(bronze, "write_ticker_parquet"):
-                        bronze.write_ticker_parquet(ticker, symbol_id, BRONZE_DIR)
+                        bronze.write_ticker_parquet(ticker, symbol_id, bronze_dir)
                     remaining_dates = get_missing_trading_dates(latest, target, valid_bars)
                     total_inserted += inserted
 

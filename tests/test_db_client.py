@@ -522,3 +522,33 @@ class TestStorageCompatibility:
             db.replace_equities_from_parquet(tmp_path / "bronze")
 
         assert db.get_latest_dates() == {"AAPL": "2025-01-02"}
+
+    @pytest.mark.integration
+    def test_replace_equities_from_parquet_custom_asset_class_venue(self, db, tmp_path):
+        """replace_equities_from_parquet respects custom asset_class and venue."""
+        # Seed a parquet file via the DB export path
+        sid = db.upsert_symbol("VIX", "volatility", "CBOE")
+        db.insert_equities_daily(
+            [
+                {
+                    "trade_date": "2025-01-02",
+                    "symbol_id": sid,
+                    "open": 18.0, "high": 20.0, "low": 17.0,
+                    "close": 19.0, "adj_close": 19.0, "volume": 0,
+                }
+            ]
+        )
+        bronze = tmp_path / "bronze"
+        db.write_ticker_parquet("VIX", sid, bronze)
+
+        # Rebuild from parquet with custom asset_class/venue
+        counts = db.replace_equities_from_parquet(
+            bronze, asset_class="volatility", venue="CBOE",
+        )
+        assert counts["symbols"] == 1
+        assert counts["rows"] == 1
+
+        # Verify the symbol was inserted with the correct asset_class and venue
+        symbols = db.query("SELECT * FROM md.symbols WHERE symbol = 'VIX'")
+        assert symbols[0]["asset_class"] == "volatility"
+        assert symbols[0]["venue"] == "CBOE"

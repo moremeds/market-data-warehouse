@@ -13,10 +13,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from ib_insync import Index, Stock
+
 from clients.bronze_client import BronzeClient
 from scripts.daily_update import (
     _easter,
     _fallback_client,
+    _make_contract,
     bars_to_rows,
     classify_gaps,
     compute_ib_duration,
@@ -450,6 +453,25 @@ class TestFallbackClientSelection:
         sentinel = _mock_fallback_instance()
         monkeypatch.setattr("scripts.daily_update.DailyBarFallbackClient", lambda: sentinel)
         assert _fallback_client() is sentinel
+
+
+# ══════════════════════════════════════════════════════════════════════
+# _make_contract
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestMakeContract:
+    def test_equity_returns_stock(self):
+        contract = _make_contract("AAPL", "equity")
+        assert isinstance(contract, Stock)
+
+    def test_volatility_returns_index(self):
+        contract = _make_contract("VIX", "volatility")
+        assert isinstance(contract, Index)
+
+    def test_default_is_equity(self):
+        contract = _make_contract("AAPL")
+        assert isinstance(contract, Stock)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1321,3 +1343,54 @@ class TestMain:
             mock_date.fromisoformat = date.fromisoformat
             mock_date.side_effect = lambda *a, **kw: date(*a, **kw)
             main()
+
+    @pytest.mark.integration
+    def test_asset_class_volatility_skips_fallback(self, tmp_path, monkeypatch):
+        """main() with --asset-class volatility skips the fallback recovery path."""
+        monkeypatch.setattr(
+            "sys.argv", ["daily_update.py", "--asset-class", "volatility"]
+        )
+
+        vol_bronze_dir = tmp_path / "data-lake" / "bronze" / "asset_class=volatility"
+        _seed_bronze(
+            vol_bronze_dir,
+            "VIX",
+            [
+                {
+                    "trade_date": "2025-01-02",
+                    "symbol_id": 1,
+                    "open": 18.0, "high": 20.0, "low": 17.0,
+                    "close": 19.0, "adj_close": 19.0, "volume": 0,
+                }
+            ],
+        )
+
+        today = date(2025, 1, 3)
+        mock_ib = _mock_ib_instance(
+            {"VIX": [_make_bar(date="2025-01-03", open=19.5, high=21.0, low=18.0, close=20.0, volume=0)]}
+        )
+        mock_fallback = _mock_fallback_instance()
+
+        with (
+            patch("scripts.daily_update.is_trading_day", return_value=True),
+            patch("scripts.daily_update.date") as mock_date,
+            patch("scripts.daily_update.IBClient", return_value=mock_ib),
+            patch("scripts.daily_update.FallbackClient", return_value=mock_fallback),
+            patch(
+                "scripts.daily_update.BronzeClient",
+                lambda **kw: BronzeClient(bronze_dir=kw.get("bronze_dir", vol_bronze_dir)),
+            ),
+            patch("scripts.daily_update.DATA_LAKE", tmp_path / "data-lake"),
+        ):
+            mock_date.today.return_value = today
+            mock_date.fromisoformat = date.fromisoformat
+            mock_date.side_effect = lambda *a, **kw: date(*a, **kw)
+            main()
+
+        with BronzeClient(bronze_dir=vol_bronze_dir) as bronze:
+            rows = bronze.read_symbol_rows("VIX")
+        assert len(rows) == 2
+        assert [row["trade_date"] for row in rows] == ["2025-01-02", "2025-01-03"]
+
+        # Fallback should never have been called
+        mock_fallback.get_daily_bar.assert_not_called()

@@ -95,7 +95,7 @@ class TestDailyScriptCompat:
         monkeypatch.setattr(daily_script, "DBClient", lambda **kwargs: storage)
         monkeypatch.setattr(daily_script, "is_trading_day", lambda d: True)
         monkeypatch.setattr(daily_script, "IBClient", lambda: mock_ib)
-        monkeypatch.setattr(daily_script, "BRONZE_DIR", tmp_path / "bronze")
+        monkeypatch.setattr(daily_script, "DATA_LAKE", tmp_path)
         monkeypatch.setattr(daily_script, "date", SimpleNamespace(
             today=lambda: date(2025, 1, 3),
             fromisoformat=date.fromisoformat,
@@ -103,4 +103,4 @@ class TestDailyScriptCompat:
 
         daily_script.main()
 
-        assert storage.write_calls == [("AAPL", 1, tmp_path / "bronze")]
+        assert storage.write_calls == [("AAPL", 1, tmp_path / "bronze" / "asset_class=equity")]

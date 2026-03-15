@@ -14,12 +14,13 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from ib_insync import Stock
+from ib_insync import Index, Stock
 
 from clients.bronze_client import BronzeClient
 from scripts.fetch_ib_historical import (
     IB_EARLIEST_DATE,
     _cursor_path,
+    _make_contract,
     _run_backfill,
     _run_normal,
     backfill_ticker,
@@ -239,6 +240,25 @@ class TestClearCursor:
     def test_no_error_when_file_missing(self, tmp_path):
         with patch("scripts.fetch_ib_historical.CURSOR_DIR", tmp_path):
             clear_cursor("nonexistent")  # Should not raise
+
+
+# ══════════════════════════════════════════════════════════════════════
+# _make_contract
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestMakeContract:
+    def test_equity_returns_stock(self):
+        contract = _make_contract("AAPL", "equity")
+        assert isinstance(contract, Stock)
+
+    def test_volatility_returns_index(self):
+        contract = _make_contract("VIX", "volatility")
+        assert isinstance(contract, Index)
+
+    def test_default_is_equity(self):
+        contract = _make_contract("AAPL")
+        assert isinstance(contract, Stock)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1109,3 +1129,37 @@ class TestMain:
 
         # Should not have fetched anything
         mock_ib.ib.run.assert_not_called()
+
+    @pytest.mark.integration
+    def test_main_asset_class_volatility(self, tmp_path, monkeypatch):
+        """main() with --asset-class volatility uses Index contracts and correct bronze dir."""
+        monkeypatch.setattr(
+            "sys.argv",
+            ["fetch_ib_historical.py", "--tickers", "VIX", "--asset-class", "volatility"],
+        )
+
+        mock_ib = _mock_ib_instance({
+            "VIX": [_make_bar(date="2025-01-02", close=20.0, volume=0)],
+        })
+
+        vol_bronze_dir = tmp_path / "data-lake" / "bronze" / "asset_class=volatility"
+
+        with (
+            patch("scripts.fetch_ib_historical.IBClient", return_value=mock_ib),
+            patch(
+                "scripts.fetch_ib_historical.BronzeClient",
+                lambda **kw: BronzeClient(bronze_dir=kw.get("bronze_dir", vol_bronze_dir)),
+            ),
+            patch("scripts.fetch_ib_historical.DATA_LAKE", tmp_path / "data-lake"),
+            patch("scripts.fetch_ib_historical.CURSOR_DIR", tmp_path / "cursors"),
+        ):
+            main()
+
+        # Verify parquet written to volatility dir
+        assert (vol_bronze_dir / "symbol=VIX" / "data.parquet").exists()
+
+        # Verify cursor was saved
+        cursor_file = tmp_path / "cursors" / "cursor_custom.json"
+        assert cursor_file.exists()
+        data = json.loads(cursor_file.read_text())
+        assert "VIX" in data["completed"]

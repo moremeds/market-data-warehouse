@@ -45,7 +45,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from ib_insync import Stock
+from ib_insync import Index, Stock
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
@@ -84,6 +84,14 @@ MAG7 = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"]
 IB_EARLIEST_DATE = datetime(1993, 1, 29)
 
 console = Console()
+
+
+def _make_contract(ticker: str, asset_class: str = "equity"):
+    """Build an IB contract for the given *ticker* and *asset_class*."""
+    if asset_class == "volatility":
+        return Index(ticker, "CBOE", "USD")
+    return Stock(ticker, "SMART", "USD")
+
 
 # ── Preset & cursor helpers ───────────────────────────────────────────
 
@@ -200,6 +208,7 @@ async def fetch_ticker_bars(
     ticker: str, ib: IBClient, semaphore: asyncio.Semaphore,
     max_years: int = 0,
     end_dt_override: datetime | None = None,
+    asset_class: str = "equity",
 ) -> tuple[str, list]:
     """Fetch historical daily bars for *ticker*.
 
@@ -208,7 +217,7 @@ async def fetch_ticker_bars(
     Returns ``(ticker, bars)`` where bars are deduplicated IB BarData objects.
     """
     t0 = time.monotonic()
-    contract = Stock(ticker, "SMART", "USD")
+    contract = _make_contract(ticker, asset_class)
     await ib.ib.qualifyContractsAsync(contract)
 
     head_ts = await ib.get_head_timestamp_async(contract)
@@ -279,6 +288,7 @@ async def fetch_all_tickers(
     tickers: list[str], ib: IBClient, max_concurrent: int = 6,
     max_years: int = 0,
     end_dt_overrides: dict[str, datetime] | None = None,
+    asset_class: str = "equity",
 ) -> dict[str, list]:
     """Fetch historical bars for all *tickers* concurrently.
 
@@ -297,7 +307,7 @@ async def fetch_all_tickers(
     async def _safe_fetch(ticker: str) -> tuple[str, list]:
         try:
             edt = end_dt_overrides.get(ticker) if end_dt_overrides else None
-            return await fetch_ticker_bars(ticker, ib, semaphore, max_years=max_years, end_dt_override=edt)
+            return await fetch_ticker_bars(ticker, ib, semaphore, max_years=max_years, end_dt_override=edt, asset_class=asset_class)
         except (IBError, Exception) as exc:
             console.print(f"    [red]{ticker}: {type(exc).__name__} — {exc}[/red]")
             return (ticker, [])
@@ -420,6 +430,12 @@ def main():
         action="store_true",
         help="Backfill mode: fetch only missing older data for tickers already in bronze parquet",
     )
+    parser.add_argument(
+        "--asset-class",
+        choices=["equity", "volatility"],
+        default="equity",
+        help="Asset class to fetch (default: equity). Use 'volatility' for CBOE volatility indices.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -475,16 +491,20 @@ def main():
 
     # ── Live bronze publication ───────────────────────────────────────
     run_t0 = time.monotonic()
+    asset_class = args.asset_class
+    bronze_dir = DATA_LAKE / "bronze" / f"asset_class={asset_class}"
 
-    with IBClient() as ib, _storage_client()(bronze_dir=BRONZE_DIR) as bronze:
+    with IBClient() as ib, _storage_client()(bronze_dir=bronze_dir) as bronze:
         ib.connect(port=args.port)
 
         if args.backfill:
             _run_backfill(args, ib, bronze, all_tickers, remaining, completed,
-                          effective_cursor, started_at)
+                          effective_cursor, started_at, asset_class=asset_class,
+                          bronze_dir=bronze_dir)
         else:
             _run_normal(args, ib, bronze, all_tickers, remaining, completed,
-                        effective_cursor, started_at)
+                        effective_cursor, started_at, asset_class=asset_class,
+                        bronze_dir=bronze_dir)
 
         run_elapsed = time.monotonic() - run_t0
         console.print(f"\n{'═' * 60}")
@@ -504,7 +524,7 @@ def main():
 
 
 def _run_backfill(args, ib, bronze, all_tickers, remaining, completed,
-                  cursor_name, started_at):
+                  cursor_name, started_at, *, asset_class="equity", bronze_dir=None):
     """Backfill mode: fetch only missing older data for tickers already in bronze."""
     oldest_dates = get_oldest_dates(bronze)
 
@@ -548,7 +568,8 @@ def _run_backfill(args, ib, bronze, all_tickers, remaining, completed,
         batch_overrides = {t: end_dt_overrides[t] for t in batch}
         ticker_bars = ib.ib.run(
             fetch_all_tickers(batch, ib, max_concurrent=args.max_concurrent,
-                              end_dt_overrides=batch_overrides)
+                              end_dt_overrides=batch_overrides,
+                              asset_class=asset_class)
         )
 
         batch_rows = 0
@@ -600,7 +621,7 @@ def _run_backfill(args, ib, bronze, all_tickers, remaining, completed,
 
 
 def _run_normal(args, ib, bronze, all_tickers, remaining, completed,
-                cursor_name, started_at):
+                cursor_name, started_at, *, asset_class="equity", bronze_dir=None):
     """Normal fetch mode: replace the per-ticker bronze snapshot."""
     if args.skip_existing:
         existing = get_existing_symbols(bronze)
@@ -637,7 +658,7 @@ def _run_normal(args, ib, bronze, all_tickers, remaining, completed,
         )
 
         ticker_bars = ib.ib.run(
-            fetch_all_tickers(batch, ib, max_concurrent=args.max_concurrent, max_years=args.years)
+            fetch_all_tickers(batch, ib, max_concurrent=args.max_concurrent, max_years=args.years, asset_class=asset_class)
         )
 
         batch_rows = 0

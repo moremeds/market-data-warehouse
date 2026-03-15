@@ -15,9 +15,12 @@ market-data-warehouse/              # Git repo
 │   ├── ib_client.py                # Interactive Brokers API client (ib_insync)
 │   ├── uw_client.py                # Unusual Whales REST API client (kept, not used for historical)
 │   └── db_client.py                # DuckDB client for md.* schema
+├── presets/
+│   ├── volatility.json             # CBOE Volatility Indices (VIX, VVIX, etc.)
+│   └── ...                         # S&P 500, NDX-100, Russell 2000 sector presets
 ├── scripts/
 │   ├── setup_market_warehouse.sh   # One-time system bootstrap
-│   ├── fetch_ib_historical.py      # Bulk historical OHLCV ingestion from IB (supports --backfill)
+│   ├── fetch_ib_historical.py      # Bulk historical OHLCV ingestion from IB (supports --backfill, --asset-class)
 │   ├── run_backfill_all.sh         # Auto-restarting runner for all presets
 │   ├── daily_update.py             # Daily parquet-first incremental update
 │   ├── run_daily_update_job.py     # Retrying scheduled daily-update runner
@@ -146,6 +149,7 @@ python scripts/fetch_ib_historical.py --tickers AAPL NVDA              # Custom 
 python scripts/fetch_ib_historical.py --preset presets/sp500.json      # From preset with cursor resume
 python scripts/fetch_ib_historical.py --years 0 --skip-existing        # Inception, skip existing
 python scripts/fetch_ib_historical.py --preset presets/sp500.json --backfill  # Backfill older data
+python scripts/fetch_ib_historical.py --preset presets/volatility.json --asset-class volatility  # CBOE vol indices
 ```
 
 Current fetch behavior:
@@ -153,6 +157,7 @@ Current fetch behavior:
 - Backfill mode merges older bars into the same per-ticker bronze snapshot
 - The live service path does not open `market.duckdb`
 - If IB returns an empty head timestamp, the fetcher falls back to `IB_EARLIEST_DATE` instead of skipping the symbol
+- `--asset-class volatility` uses `Index('SYMBOL', 'CBOE')` contracts instead of `Stock('SYMBOL', 'SMART')` and writes to `data-lake/bronze/asset_class=volatility/`
 
 ### Backfill mode
 
@@ -186,6 +191,7 @@ python scripts/daily_update.py --target-date 2026-03-11        # Recover through
 python scripts/daily_update.py --preset presets/sp500.json      # Limit to preset tickers
 python scripts/daily_update.py --port 7497 --max-concurrent 4   # Custom IB config
 python scripts/daily_update.py --batch-size 25                  # Custom batch size
+python scripts/daily_update.py --asset-class volatility          # Daily update for volatility indices
 ```
 
 **Scheduling with launchd** (macOS):
@@ -207,7 +213,7 @@ The main sync runs at 13:05 Pacific local time daily (4:05 PM Eastern year-round
 - Bar validation: checks OHLCV relationships, positive prices, valid trading days, duplicate dates
 - Atomically rewrites a per-ticker bronze snapshot after each successful merge
 - The active sync universe is the canonical bronze tree only; archive delisted symbols outside that tree if they should stop participating in future syncs/backfills
-- Recovery path for unresolved target-day gaps: Nasdaq historical quote API (`stocks`, then `etf`) and then Stooq `symbol.us`
+- Recovery path for unresolved target-day gaps (equity only): Nasdaq historical quote API (`stocks`, then `etf`) and then Stooq `symbol.us`; fallback is skipped for non-equity asset classes
 - Fallback bars use the same validation and bronze merge path as IB bars
 - Run summary exposes `Fallback attempts`, `Fallback successes`, and `Fallback symbols`
 - Pure-Python NYSE trading calendar — no new dependencies
@@ -220,10 +226,11 @@ The main sync runs at 13:05 Pacific local time daily (4:05 PM Eastern year-round
 
 ```bash
 source ~/market-warehouse/.venv/bin/activate
-python scripts/rebuild_duckdb_from_parquet.py
+python scripts/rebuild_duckdb_from_parquet.py                           # Rebuild equity data (default)
+python scripts/rebuild_duckdb_from_parquet.py --asset-class volatility  # Rebuild volatility data
 ```
 
-This repopulates `~/market-warehouse/duckdb/market.duckdb` from the canonical bronze parquet tree when you want a fresh analytical DB file. The rebuild path recreates the analytical tables from scratch on each run, so rerunning it against an existing DuckDB file is safe.
+This repopulates `~/market-warehouse/duckdb/market.duckdb` from the canonical bronze parquet tree when you want a fresh analytical DB file. The rebuild path recreates the analytical tables from scratch on each run, so rerunning it against an existing DuckDB file is safe. The `--asset-class` flag derives the correct bronze directory and sets the `venue` in `md.symbols` (`SMART` for equity, `CBOE` for volatility).
 
 ### Querying
 

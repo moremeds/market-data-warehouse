@@ -211,12 +211,16 @@ python scripts/fetch_ib_historical.py --years 10 --port 7497 --max-concurrent 4
 
 # Backfill missing older data for tickers already in bronze parquet:
 python scripts/fetch_ib_historical.py --preset presets/sp500.json --backfill
+
+# Fetch CBOE volatility indices (VIX, VVIX, etc.):
+python scripts/fetch_ib_historical.py --preset presets/volatility.json --asset-class volatility
 ```
 
 Current behavior:
 - Normal mode atomically rewrites the canonical per-ticker bronze snapshot
 - The writer uses `temp -> validate -> os.replace()` for crash-safe publication
 - If IB returns an empty head timestamp for a symbol, the fetcher falls back to the earliest supported IB historical date instead of skipping the symbol entirely
+- `--asset-class` flag supports `equity` (default, `Stock('SYMBOL', 'SMART')`) and `volatility` (`Index('SYMBOL', 'CBOE')` for CBOE indices like VIX)
 
 ### Backfill Mode
 
@@ -276,6 +280,9 @@ python scripts/daily_update.py --preset presets/sp500.json
 
 # Custom IB port and concurrency:
 python scripts/daily_update.py --port 7497 --max-concurrent 4 --batch-size 25
+
+# Daily update for volatility indices (skips fallback chain):
+python scripts/daily_update.py --asset-class volatility
 ```
 
 **Key design:**
@@ -302,10 +309,11 @@ When you want a fresh queryable DuckDB file without making the service hold a wr
 
 ```bash
 source ~/market-warehouse/.venv/bin/activate
-python scripts/rebuild_duckdb_from_parquet.py
+python scripts/rebuild_duckdb_from_parquet.py                            # Rebuild equity data (default)
+python scripts/rebuild_duckdb_from_parquet.py --asset-class volatility   # Rebuild volatility data
 ```
 
-This rebuilds `~/market-warehouse/duckdb/market.duckdb` from the canonical bronze parquet tree using set-based `INSERT INTO ... SELECT FROM read_parquet(...)`. The rebuild path recreates the analytical tables from scratch on each run, so it is safe to rerun against an existing DuckDB file.
+This rebuilds `~/market-warehouse/duckdb/market.duckdb` from the canonical bronze parquet tree using set-based `INSERT INTO ... SELECT FROM read_parquet(...)`. The rebuild path recreates the analytical tables from scratch on each run, so it is safe to rerun against an existing DuckDB file. The `--asset-class` flag derives the correct bronze directory and sets the appropriate `venue` in `md.symbols` (`SMART` for equity, `CBOE` for volatility).
 
 ## Strategies (Extracted to doob)
 
@@ -506,6 +514,8 @@ The intended workflow is:
 │   ├── bronze/
 │   │   ├── asset_class=equity/
 │   │   │   └── symbol=AAPL/data.parquet
+│   │   ├── asset_class=volatility/
+│   │   │   └── symbol=VIX/data.parquet
 │   │   ├── asset_class=option/
 │   │   └── asset_class=future/
 │   ├── silver/

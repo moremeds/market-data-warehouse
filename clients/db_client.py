@@ -302,7 +302,12 @@ class DBClient:
         log.info("Wrote %s", out_path)
         return out_path
 
-    def replace_equities_from_parquet(self, bronze_dir: str | Path) -> dict[str, int]:
+    def replace_equities_from_parquet(
+        self,
+        bronze_dir: str | Path,
+        asset_class: str = "equity",
+        venue: str = "SMART",
+    ) -> dict[str, int]:
         """Rebuild md.symbols and md.equities_daily from bronze parquet."""
         bronze_dir = Path(bronze_dir)
         parquet_files = list(bronze_dir.glob("symbol=*/data.parquet"))
@@ -322,8 +327,8 @@ class DBClient:
                     SELECT DISTINCT
                         symbol_id,
                         symbol,
-                        'equity' AS asset_class,
-                        'SMART' AS venue
+                        '{asset_class}' AS asset_class,
+                        '{venue}' AS venue
                     FROM read_parquet('{parquet_glob}', hive_partitioning=true)
                     """
                 )
