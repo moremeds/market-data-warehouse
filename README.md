@@ -93,7 +93,7 @@ Raw → Bronze → Silver → Gold
 * Python 3.12+
 * Node.js 22+
 * DuckDB
-* Interactive Brokers account
+* [Interactive Brokers](https://ibkr.com/referral/joseph5632) account
 * Docker (recommended for IB Gateway)
 * ClickHouse (optional)
 
@@ -118,7 +118,7 @@ chmod +x setup_market_warehouse.sh
 
 ---
 
-## Interactive Brokers Gateway
+## [Interactive Brokers](https://ibkr.com/referral/joseph5632) Gateway
 
 You need a running IB Gateway for ingestion.
 
