@@ -37,8 +37,8 @@ The native macOS client has been extracted to the standalone **Sift** app at `~/
 - **Node.js 22+** — [nodejs.org](https://nodejs.org/) or `brew install node@22` (required for scheduled failure emails)
 - **DuckDB** — [duckdb.org](https://duckdb.org/docs/installation/) or `brew install duckdb`
 - **Interactive Brokers account** — [interactivebrokers.com](https://www.interactivebrokers.com/) (live or paper trading account required for market data API access)
-- **IB Gateway** (offline version) — [download page](https://www.interactivebrokers.com/en/trading/ibgateway-stable.php) (included with TWS installer; must be the offline/stable version)
-- **IBC** (IB Controller) — [github.com/IbcAlpha/IBC](https://github.com/IbcAlpha/IBC/releases/latest) (automates Gateway login, reconnection, and daily restarts)
+- **IB Gateway** — either via **Docker** (preferred, see below) or native **IB Gateway offline** ([download](https://www.interactivebrokers.com/en/trading/ibgateway-stable.php)) with **IBC** ([github.com/IbcAlpha/IBC](https://github.com/IbcAlpha/IBC/releases/latest)) for automated login on macOS
+- **Docker** (recommended for IB Gateway) — [docker.com](https://www.docker.com/get-started/)
 - **ClickHouse** (optional) — [clickhouse.com](https://clickhouse.com/docs/en/install) or `brew install clickhouse` (only needed for production-style benchmarking)
 - **Homebrew** (macOS) — [brew.sh](https://brew.sh/)
 
@@ -52,11 +52,53 @@ The native macOS client has been extracted to the standalone **Sift** app at `~/
 - `pytest`, `pytest-cov`, `responses` — testing
 
 
-## IB Gateway with IBC (Automated Connection Management)
+## IB Gateway with Docker (Recommended)
 
-IBC automates IB Gateway startup, login, reconnection, and daily restarts — making API connections robust and hands-free.
+The simplest way to run IB Gateway is via Docker using [gnzsnz/ib-gateway-docker](https://github.com/gnzsnz/ib-gateway-docker). Configuration lives at `docker/ib-gateway/`.
 
-For this repo, IBC is a required machine-local dependency for any workflow that talks to Interactive Brokers. The secure service lives under `~/ibc`, `~/ibc-install`, and `~/Library/LaunchAgents` on the user's Mac. It is required for this project, but it is not scoped to this repo and should be treated as a global local service.
+### Quick Start
+
+```bash
+cd docker/ib-gateway
+cp .env.example .env
+# Edit .env — set TWS_USERID to your IB username
+mkdir -p secrets
+echo "YOUR_IB_PASSWORD" > secrets/ib_password.txt
+docker compose up -d
+```
+
+Complete 2FA via VNC (`localhost:5900`, requires `VNC_SERVER_PASSWORD` in `.env`) or the IBKR mobile app. Verify with `docker compose ps` — status should show healthy after ~2 minutes.
+
+### Port Mapping
+
+SOCAT inside the container relays from 0.0.0.0 to IB Gateway's localhost-only API:
+
+| Host port | Container port | Purpose |
+|-----------|---------------|---------|
+| 4001 | 4003 (SOCAT → 4001) | Live trading API |
+| 4002 | 4004 (SOCAT → 4002) | Paper trading API |
+| 5900 | 5900 | VNC (opt-in) |
+
+### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TWS_USERID` | — | IB username (plain env var, required) |
+| `TRADING_MODE` | `paper` | `paper` or `live` |
+| `READ_ONLY_API` | `yes` | Recommended for data warehouse use |
+| `VNC_SERVER_PASSWORD` | — | Set to enable VNC; leave empty to disable |
+
+Password is provided via Docker secrets (`secrets/ib_password.txt`). Gateway settings persist in a Docker volume across restarts.
+
+See `docker/ib-gateway/README.md` for full operations guide.
+
+---
+
+## IB Gateway with IBC (macOS Native Alternative)
+
+IBC automates IB Gateway startup, login, reconnection, and daily restarts on macOS — an alternative to the Docker approach above.
+
+For macOS workstations, IBC is the native machine-local dependency for IB-backed workflows. The secure service lives under `~/ibc`, `~/ibc-install`, and `~/Library/LaunchAgents` on the user's Mac. It is not scoped to this repo and should be treated as a global local service.
 
 ### Installation
 
@@ -137,9 +179,10 @@ The LaunchAgent label is `local.ibc-gateway`.
 
 ### Project Dependency Model
 
-- This project requires a working local IBC service whenever you run IB-backed ingestion or daily update flows.
-- The service is global to the machine, not scoped to this repo, and can be shared by multiple local projects that use the same IB Gateway install.
-- The repo provides an installer and documentation for that service, but the installed artifacts live under the user's home directory rather than inside the repo.
+- This project requires a reachable IB Gateway endpoint (`127.0.0.1:4001` by default) for IB-backed ingestion and daily update flows.
+- Gateway can run via Docker (recommended) or the native macOS IBC service described here.
+- The native IBC service is global to the machine, not scoped to this repo, and can be shared by multiple local projects.
+- The repo provides an installer and documentation for the native service, but the installed artifacts live under the user's home directory rather than inside the repo.
 
 ### IBC Commands (while Gateway is running)
 
@@ -190,7 +233,7 @@ IBC's stock `~/ibc-install/gatewaystartmacos.sh` still works with a plaintext `~
 
 ### Prerequisites
 
-Requires **IB Gateway** running on localhost via IBC. For this repo, the recommended and documented path is the installed secure machine-local service `local.ibc-gateway`; manual startup is only a fallback. Default port: `4001`.
+Requires **IB Gateway** running on a reachable endpoint (default `127.0.0.1:4001`). Use Docker (`docker/ib-gateway/`) or the native macOS IBC service. Connection host and port are configurable via `--host`/`--port` CLI flags or `MDW_IB_HOST`/`MDW_IB_PORT` environment variables.
 
 ### Fetch Historical OHLCV
 
@@ -206,8 +249,8 @@ python scripts/fetch_ib_historical.py --tickers AAPL NVDA
 # From a preset file (with cursor-based resume):
 python scripts/fetch_ib_historical.py --preset presets/sp500.json
 
-# Custom years, port, concurrency:
-python scripts/fetch_ib_historical.py --years 10 --port 7497 --max-concurrent 4
+# Custom host, port, concurrency:
+python scripts/fetch_ib_historical.py --years 10 --host 127.0.0.1 --port 7497 --max-concurrent 4
 
 # Backfill missing older data for tickers already in bronze parquet:
 python scripts/fetch_ib_historical.py --preset presets/sp500.json --backfill
@@ -287,8 +330,8 @@ python scripts/daily_update.py --target-date 2026-03-11
 # Limit to a specific preset:
 python scripts/daily_update.py --preset presets/sp500.json
 
-# Custom IB port and concurrency:
-python scripts/daily_update.py --port 7497 --max-concurrent 4 --batch-size 25
+# Custom IB host, port, and concurrency:
+python scripts/daily_update.py --host 127.0.0.1 --port 7497 --max-concurrent 4 --batch-size 25
 
 # Daily update for volatility indices (skips fallback chain):
 python scripts/daily_update.py --asset-class volatility

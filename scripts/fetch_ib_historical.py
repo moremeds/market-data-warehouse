@@ -40,6 +40,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sys
 import time
 from datetime import datetime, timedelta
@@ -484,10 +485,16 @@ def main():
         help="Tickers per async batch (default: 5)",
     )
     parser.add_argument(
+        "--host",
+        type=str,
+        default=os.getenv("MDW_IB_HOST", "127.0.0.1"),
+        help="IB Gateway host (default: $MDW_IB_HOST or 127.0.0.1)",
+    )
+    parser.add_argument(
         "--port",
         type=int,
-        default=4001,
-        help="IB Gateway port (default: 4001)",
+        default=int(os.getenv("MDW_IB_PORT", "4001")),
+        help="IB Gateway port (default: $MDW_IB_PORT or 4001)",
     )
     parser.add_argument(
         "--max-concurrent",
@@ -530,7 +537,7 @@ def main():
     mode_label = "backfill" if args.backfill else "normal"
     console.print(
         f"[bold]Config:[/bold]  batch_size={args.batch_size}  max_concurrent={args.max_concurrent}"
-        f"  port={args.port}  years={years_label}  skip_existing={args.skip_existing}"
+        f"  host={args.host}  port={args.port}  years={years_label}  skip_existing={args.skip_existing}"
         f"  mode={mode_label}"
     )
 
@@ -566,7 +573,7 @@ def main():
     bronze_dir = DATA_LAKE / "bronze" / f"asset_class={asset_class}"
 
     with IBClient() as ib, _storage_client()(bronze_dir=bronze_dir, asset_class=asset_class) as bronze:
-        ib.connect(port=args.port)
+        ib.connect(host=args.host, port=args.port)
 
         if args.backfill:
             _run_backfill(args, ib, bronze, all_tickers, remaining, completed,

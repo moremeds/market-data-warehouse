@@ -1529,3 +1529,92 @@ class TestMain:
 
         # Fallback should never have been called (futures skips fallback)
         mock_fallback.get_daily_bar.assert_not_called()
+
+    @pytest.mark.integration
+    def test_main_custom_host(self, tmp_path, monkeypatch):
+        """main() respects --host and --port flags."""
+        monkeypatch.setattr(
+            "sys.argv",
+            ["daily_update.py", "--host", "192.168.1.50", "--port", "4002"],
+        )
+        bronze_dir = tmp_path / "bronze"
+        _seed_bronze(
+            bronze_dir,
+            "AAPL",
+            [
+                {
+                    "trade_date": "2025-01-02",
+                    "symbol_id": 1,
+                    "open": 150.0, "high": 155.0, "low": 149.0,
+                    "close": 153.0, "adj_close": 153.0, "volume": 1000000,
+                }
+            ],
+        )
+
+        today = date(2025, 1, 3)
+        mock_ib = _mock_ib_instance(
+            {"AAPL": [_make_bar(date="2025-01-03", open=154.0, high=158.0, low=152.0, close=156.0)]}
+        )
+        mock_fallback = _mock_fallback_instance()
+
+        with (
+            patch("scripts.daily_update.is_trading_day", return_value=True),
+            patch("scripts.daily_update.date") as mock_date,
+            patch("scripts.daily_update.IBClient", return_value=mock_ib),
+            patch("scripts.daily_update.FallbackClient", return_value=mock_fallback),
+            patch(
+                "scripts.daily_update.BronzeClient",
+                lambda **kw: BronzeClient(bronze_dir=bronze_dir),
+            ),
+            patch("scripts.daily_update.DATA_LAKE", tmp_path / "data-lake"),
+        ):
+            mock_date.today.return_value = today
+            mock_date.fromisoformat = date.fromisoformat
+            mock_date.side_effect = lambda *a, **kw: date(*a, **kw)
+            main()
+
+        mock_ib.connect.assert_called_once_with(host="192.168.1.50", port=4002)
+
+    @pytest.mark.integration
+    def test_main_env_var_defaults(self, tmp_path, monkeypatch):
+        """main() reads MDW_IB_HOST and MDW_IB_PORT from environment."""
+        monkeypatch.setenv("MDW_IB_HOST", "10.0.0.5")
+        monkeypatch.setenv("MDW_IB_PORT", "4002")
+        monkeypatch.setattr("sys.argv", ["daily_update.py"])
+        bronze_dir = tmp_path / "bronze"
+        _seed_bronze(
+            bronze_dir,
+            "AAPL",
+            [
+                {
+                    "trade_date": "2025-01-02",
+                    "symbol_id": 1,
+                    "open": 150.0, "high": 155.0, "low": 149.0,
+                    "close": 153.0, "adj_close": 153.0, "volume": 1000000,
+                }
+            ],
+        )
+
+        today = date(2025, 1, 3)
+        mock_ib = _mock_ib_instance(
+            {"AAPL": [_make_bar(date="2025-01-03", open=154.0, high=158.0, low=152.0, close=156.0)]}
+        )
+        mock_fallback = _mock_fallback_instance()
+
+        with (
+            patch("scripts.daily_update.is_trading_day", return_value=True),
+            patch("scripts.daily_update.date") as mock_date,
+            patch("scripts.daily_update.IBClient", return_value=mock_ib),
+            patch("scripts.daily_update.FallbackClient", return_value=mock_fallback),
+            patch(
+                "scripts.daily_update.BronzeClient",
+                lambda **kw: BronzeClient(bronze_dir=bronze_dir),
+            ),
+            patch("scripts.daily_update.DATA_LAKE", tmp_path / "data-lake"),
+        ):
+            mock_date.today.return_value = today
+            mock_date.fromisoformat = date.fromisoformat
+            mock_date.side_effect = lambda *a, **kw: date(*a, **kw)
+            main()
+
+        mock_ib.connect.assert_called_once_with(host="10.0.0.5", port=4002)

@@ -66,8 +66,10 @@ Current live shape:
 
 ## Operational Facts
 
-- For this repo, IB Gateway is expected on `127.0.0.1:4001` via the global machine-local secure IBC service installed under `~/ibc`, `~/ibc-install`, and `~/Library/LaunchAgents/local.ibc-gateway.plist`.
-- That secure IBC service is required for IB-backed workflows in this repo, but the service itself is not scoped to this repo and should be treated as shared machine-local infrastructure.
+- IB Gateway is expected on `127.0.0.1:4001` by default, configurable via `MDW_IB_HOST`/`MDW_IB_PORT` env vars or `--host`/`--port` CLI flags.
+- Gateway can run via **Docker** (`docker/ib-gateway/`, recommended) or the native **macOS IBC service** (`~/ibc`, `~/ibc-install`, `~/Library/LaunchAgents/local.ibc-gateway.plist`).
+- The Docker setup uses `gnzsnz/ib-gateway-docker` with file-based secrets and SOCAT port relay (host 4001 → container 4003 → Gateway 4001).
+- The native IBC service is not scoped to this repo and should be treated as shared machine-local infrastructure.
 - `IBClient.connect()` already retries successive `clientId` values after IB error `326`.
 - `scripts/daily_update.py` is the scheduled parquet-first daily sync and supports `--target-date YYYY-MM-DD` for fixed-date catch-up runs without publishing later bars.
 - `scripts/fetch_cboe_volatility.py` fetches all CBOE volatility indices directly from CBOE's public API. This is the authoritative daily sync source for VIX, VVIX, VXHYG, VXSMH, and all other volatility indices in `presets/volatility.json`.
@@ -84,7 +86,8 @@ Current live shape:
 
 Common traps — check these before investigating further:
 
-- **IB Gateway availability**: Check `~/ibc/logs/ibc-gateway-service.log` and port 4001 before assuming IB is reachable. The secure LaunchAgent may not be running.
+- **IB Gateway availability**: Check `docker compose ps` (Docker) or `~/ibc/logs/ibc-gateway-service.log` (native) and port 4001 before assuming IB is reachable.
+- **Docker vs native Gateway port conflict**: Both bind to `127.0.0.1:4001` by default. Do not run both simultaneously.
 - **DuckDB file locks**: Never open `market.duckdb` from the live service path. The daily update intentionally avoids DuckDB writes — this is by design, not a bug.
 - **Empty IB head timestamps**: IB returns empty head timestamps for some symbols. The fallback to `IB_EARLIEST_DATE` is intentional — do not treat it as an error.
 - **IB error 326 (client ID in use)**: Handled by auto-retry in `IBClient.connect()`. Do not manually reassign client IDs.

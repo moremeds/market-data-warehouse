@@ -845,7 +845,7 @@ class TestMain:
         ):
             main()
 
-        mock_ib.connect.assert_called_once_with(port=7497)
+        mock_ib.connect.assert_called_once_with(host="127.0.0.1", port=7497)
         # Verify max_concurrent was passed to fetch_all_tickers via ib.ib.run
         run_call = mock_ib.ib.run.call_args
         assert run_call is not None
@@ -1278,3 +1278,52 @@ class TestMain:
         assert cursor_file.exists()
         data = json.loads(cursor_file.read_text())
         assert "VIX" in data["completed"]
+
+    @pytest.mark.integration
+    def test_main_custom_host(self, tmp_path, monkeypatch):
+        """main() respects --host flag."""
+        monkeypatch.setattr(
+            "sys.argv",
+            ["fetch_ib_historical.py", "--tickers", "AAPL",
+             "--host", "192.168.1.50", "--port", "4002"],
+        )
+
+        mock_ib = _mock_ib_instance({"AAPL": [_make_bar()]})
+
+        with (
+            patch("scripts.fetch_ib_historical.IBClient", return_value=mock_ib),
+            patch(
+                "scripts.fetch_ib_historical.BronzeClient",
+                lambda **kw: BronzeClient(bronze_dir=tmp_path / "bronze"),
+            ),
+            patch("scripts.fetch_ib_historical.BRONZE_DIR", tmp_path / "bronze"),
+            patch("scripts.fetch_ib_historical.CURSOR_DIR", tmp_path / "cursors"),
+        ):
+            main()
+
+        mock_ib.connect.assert_called_once_with(host="192.168.1.50", port=4002)
+
+    @pytest.mark.integration
+    def test_main_env_var_defaults(self, tmp_path, monkeypatch):
+        """main() reads MDW_IB_HOST and MDW_IB_PORT from environment."""
+        monkeypatch.setenv("MDW_IB_HOST", "10.0.0.5")
+        monkeypatch.setenv("MDW_IB_PORT", "4002")
+        monkeypatch.setattr(
+            "sys.argv",
+            ["fetch_ib_historical.py", "--tickers", "AAPL"],
+        )
+
+        mock_ib = _mock_ib_instance({"AAPL": [_make_bar()]})
+
+        with (
+            patch("scripts.fetch_ib_historical.IBClient", return_value=mock_ib),
+            patch(
+                "scripts.fetch_ib_historical.BronzeClient",
+                lambda **kw: BronzeClient(bronze_dir=tmp_path / "bronze"),
+            ),
+            patch("scripts.fetch_ib_historical.BRONZE_DIR", tmp_path / "bronze"),
+            patch("scripts.fetch_ib_historical.CURSOR_DIR", tmp_path / "cursors"),
+        ):
+            main()
+
+        mock_ib.connect.assert_called_once_with(host="10.0.0.5", port=4002)

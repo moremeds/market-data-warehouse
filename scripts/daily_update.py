@@ -33,6 +33,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sys
 import time
 from datetime import date, datetime, timedelta
@@ -504,8 +505,14 @@ def resolve_target_date(today: date, requested_target: str | None, force: bool) 
 def main():
     parser = argparse.ArgumentParser(description="Daily market data update")
     parser.add_argument(
-        "--port", type=int, default=4001,
-        help="IB Gateway port (default: 4001)",
+        "--host", type=str,
+        default=os.getenv("MDW_IB_HOST", "127.0.0.1"),
+        help="IB Gateway host (default: $MDW_IB_HOST or 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port", type=int,
+        default=int(os.getenv("MDW_IB_PORT", "4001")),
+        help="IB Gateway port (default: $MDW_IB_PORT or 4001)",
     )
     parser.add_argument(
         "--max-concurrent", type=int, default=6,
@@ -557,7 +564,7 @@ def main():
     asset_class = args.asset_class
     bronze_dir = DATA_LAKE / "bronze" / f"asset_class={asset_class}"
 
-    console.print(f"\n[bold]Daily Update[/bold]  target_date={target}  force={args.force}  asset_class={asset_class}")
+    console.print(f"\n[bold]Daily Update[/bold]  target_date={target}  force={args.force}  asset_class={asset_class}  host={args.host}  port={args.port}")
 
     # ── Load preset filter (if any) ─────────────────────────────────
     preset_tickers: set[str] | None = None
@@ -622,7 +629,7 @@ def main():
         fallback_symbols = 0
 
         with IBClient() as ib, _fallback_client() as fallback:
-            ib.connect(port=args.port)
+            ib.connect(host=args.host, port=args.port)
 
             batches = [
                 tickers_with_durations[i:i + args.batch_size]

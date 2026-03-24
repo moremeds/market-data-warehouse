@@ -37,6 +37,8 @@ market-data-warehouse/              # Git repo
 │   ├── com.market-warehouse.daily-update.plist.example  # macOS launchd template
 │   ├── com.market-warehouse.daily-update-watchdog.plist.example # macOS launchd watchdog template
 │   └── pre-commit-secrets-scan.sh  # Pre-commit hook: secrets scanner
+├── docker/
+│   └── ib-gateway/                 # Docker Compose setup for IB Gateway (alternative to native IBC)
 ├── tests/
 │   ├── conftest.py                 # Shared fixtures: tmp_duckdb, db
 │   ├── test_daily_bar_fallback.py  # Unit tests for fallback providers
@@ -103,9 +105,9 @@ ClickHouse mirrors the same schema with MergeTree engines partitioned by `toYYYY
 
 ## IB Gateway / IBC
 
-IB Gateway is managed by **IBC** (IB Controller) for automated login, reconnection, and daily restarts.
+IB Gateway is managed by **IBC** (IB Controller) for automated login, reconnection, and daily restarts. For Docker-based Gateway, see the **IB Gateway — Docker** section below.
 
-For this repo, IBC is a required machine-local dependency for IB-backed workflows. The secure service is installed globally under the user's home directory and is not scoped to this repo.
+For macOS workstations, IBC is the native machine-local dependency for IB-backed workflows. The secure service is installed globally under the user's home directory and is not scoped to this repo.
 
 - **IBC install**: `~/ibc-install/` (IBC.jar + scripts)
 - **IBC secure config**: `~/ibc/config.secure.ini` (settings only; no credentials)
@@ -120,9 +122,27 @@ For this repo, IBC is a required machine-local dependency for IB-backed workflow
 - **Gateway API port**: 4001
 - **Auto-restart**: 11:58 PM daily, cold restart Sundays 07:05
 
+## IB Gateway — Docker (Alternative)
+
+IB Gateway can also run as a Docker container via [gnzsnz/ib-gateway-docker](https://github.com/gnzsnz/ib-gateway-docker). Configuration lives at `docker/ib-gateway/`.
+
+- **Setup**: `cd docker/ib-gateway && cp .env.example .env`, set `TWS_USERID`, create `secrets/ib_password.txt`
+- **Start**: `docker compose up -d`
+- **2FA**: Via VNC client at `localhost:5900` (opt-in, requires `VNC_SERVER_PASSWORD`) or IBKR mobile app
+- **Health check**: `docker compose ps` — shows healthy after ~2 min
+- **Ports**: host 4001 → container 4003 (live SOCAT relay), host 4002 → container 4004 (paper), host 5900 → VNC
+- **Trading mode**: `TRADING_MODE=paper` (default) or `live` in `.env`
+- **Read-only API**: `READ_ONLY_API=yes` (default, recommended for data warehouse)
+- **Secrets**: `TWS_USERID` is a plain env var; password uses Docker `secrets:` directive via `TWS_PASSWORD_FILE`
+- **Settings**: Persisted in a Docker volume across container restarts
+- **Logs**: `docker compose logs -f`
+- **Stop**: `docker compose down`
+
+Scripts connect to `127.0.0.1:4001` by default — same endpoint whether Gateway runs natively via IBC or in Docker. Override with `MDW_IB_HOST` / `MDW_IB_PORT` env vars or `--host` / `--port` CLI flags.
+
 ## Data Ingestion
 
-Data source: **Interactive Brokers** via `ib_insync`. Requires IB Gateway running on localhost via the global machine-local IBC service.
+Data source: **Interactive Brokers** via `ib_insync`. Requires IB Gateway running on a reachable endpoint (default `127.0.0.1:4001`), either natively via the macOS IBC service or via Docker.
 
 - `IBClient` wraps `ib_insync.IB` with connection management, historical data, and contract qualification
 - `IBClient.connect()` defaults to `clientId=0` and automatically retries successive `clientId` values if IB reports error `326` (`client id already in use`)
@@ -175,7 +195,10 @@ python scripts/fetch_ib_historical.py --preset presets/volatility.json --asset-c
 python scripts/fetch_cboe_volatility.py                                                        # CBOE vol indices (daily sync, preferred)
 python scripts/fetch_ib_historical.py --preset presets/futures-index.json --asset-class futures  # CME/CBOT index futures
 python scripts/fetch_ib_historical.py --preset presets/futures-energy.json --asset-class futures  # NYMEX energy futures
+python scripts/fetch_ib_historical.py --host 192.168.1.50 --port 4001 --tickers AAPL            # Remote IB Gateway
 ```
+
+IB connection defaults to `127.0.0.1:4001`, configurable via `--host`/`--port` flags or `MDW_IB_HOST`/`MDW_IB_PORT` environment variables.
 
 Current fetch behavior:
 - Normal mode atomically replaces the per-ticker bronze snapshot
@@ -230,7 +253,7 @@ python scripts/daily_update.py --dry-run                        # Report gaps wi
 python scripts/daily_update.py --force                          # Run on non-trading day
 python scripts/daily_update.py --target-date 2026-03-11        # Recover through a fixed trading date
 python scripts/daily_update.py --preset presets/sp500.json      # Limit to preset tickers
-python scripts/daily_update.py --port 7497 --max-concurrent 4   # Custom IB config
+python scripts/daily_update.py --host 127.0.0.1 --port 7497 --max-concurrent 4   # Custom IB config
 python scripts/daily_update.py --batch-size 25                  # Custom batch size
 python scripts/daily_update.py --asset-class volatility          # Daily update for volatility indices
 python scripts/daily_update.py --asset-class futures             # Daily update for futures contracts
@@ -341,3 +364,4 @@ Common traps that derail debugging sessions — check these before investigating
 - **IB error 326 (client ID in use)**: Handled by auto-retry in `IBClient.connect()`. Don't manually reassign client IDs.
 - **Weekend/holiday runs**: IB returns no data on non-trading days. These are harmless no-ops — don't debug "no data returned" on weekends or holidays.
 - **CBOE volatility fetch**: Volatility indices use CBOE's public API, not IB. If VIX data looks stale, check `fetch_cboe_volatility.py`, not IB connectivity.
+- **Docker vs native Gateway**: Both bind to `127.0.0.1:4001` by default. Don't run both simultaneously — they'll conflict on the port. Set `MDW_IB_HOST`/`MDW_IB_PORT` only when connecting to a remote Docker host.
