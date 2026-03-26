@@ -20,6 +20,7 @@ load_env_file() {
     fi
 }
 
+load_env_file "$HOME/.secrets"
 load_env_file "$REPO_ENV"
 load_env_file "$WAREHOUSE_ENV"
 source "$VENV/bin/activate"

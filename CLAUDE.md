@@ -127,6 +127,18 @@ IB Gateway can also run as a Docker container via [gnzsnz/ib-gateway-docker](htt
 
 Scripts connect to `127.0.0.1:4001` by default — same endpoint whether Gateway runs natively via IBC or in Docker. Override with `MDW_IB_HOST` / `MDW_IB_PORT` env vars or `--host` / `--port` CLI flags.
 
+## IB Gateway — Cloud (Hetzner VPS + Tailscale)
+
+IB Gateway can run on a Hetzner CX22 VPS (~$4-6/mo) with Tailscale for secure, WireGuard-encrypted remote access. The existing `docker-compose.yml` works unmodified on the VPS.
+
+- **Canonical endpoint**: `ib-gateway:4001` (Tailscale MagicDNS hostname, survives IP changes)
+- **Client config**: `MDW_IB_HOST=ib-gateway` in `.env` or as env var — all scripts use this automatically
+- **Security**: All ports blocked on public interface; IB API, VNC, and SSH accessible only via Tailscale mesh; identity-based ACLs control per-device access
+- **Read-only**: `READ_ONLY_API=yes` enforced for data warehouse safety
+- **Cutover**: Cold cutover required — IB allows only one active session per login; running two gateways causes session displacement
+- **Break-glass**: Hetzner web console provides browser-based VNC if Tailscale is unreachable
+- **Full setup**: See `docker/ib-gateway/README.md` for provisioning, hardening, Tailscale ACLs, client enrollment, rollback, and 2FA reauth runbook
+
 ## Data Ingestion
 
 Data source: **Interactive Brokers** via `ib_insync`. Requires IB Gateway running on a reachable endpoint (default `127.0.0.1:4001`), either natively via the macOS IBC service or via Docker.
@@ -254,7 +266,7 @@ sed "s|/path/to/repo|$(pwd)|g" scripts/com.market-warehouse.daily-update-watchdo
 launchctl load ~/Library/LaunchAgents/com.market-warehouse.daily-update.plist
 launchctl load ~/Library/LaunchAgents/com.market-warehouse.daily-update-watchdog.plist
 ```
-`scripts/run_daily_update.sh` now loads `.env` files, activates the warehouse venv, and runs `scripts/run_daily_update_job.py`, which retries failed sync attempts before terminal failure. The runner automatically syncs equities and futures via IB, then all volatility indices via CBOE's public API in a single invocation; pass `--asset-class <name>` to run only one IB asset class (skips CBOE volatility sync).
+`scripts/run_daily_update.sh` sources `~/.secrets` (for API keys like `CEREBRAS_API_KEY`), loads `.env` files, activates the warehouse venv, and runs `scripts/run_daily_update_job.py`, which retries failed sync attempts before terminal failure. The `~/.secrets` source is necessary because launchd does not run a login shell, so `~/.zshrc` is never executed. The runner automatically syncs equities and futures via IB, then all volatility indices via CBOE's public API in a single invocation; pass `--asset-class <name>` to run only one IB asset class (skips CBOE volatility sync).
 
 The main sync runs at 13:05 Pacific local time daily (4:05 PM Eastern year-round). The watchdog runs at 18:30 Pacific by default and alerts if the scheduled sync never started or never logged a completion marker. Non-trading days are harmless no-ops.
 
