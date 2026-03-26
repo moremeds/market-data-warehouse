@@ -129,14 +129,16 @@ Scripts connect to `127.0.0.1:4001` by default — same endpoint whether Gateway
 
 ## IB Gateway — Cloud (Hetzner VPS + Tailscale)
 
-IB Gateway can run on a Hetzner CX22 VPS (~$4-6/mo) with Tailscale for secure, WireGuard-encrypted remote access. The existing `docker-compose.yml` works unmodified on the VPS.
+IB Gateway runs on a Hetzner CPX11 VPS (~$4-6/mo) in Ashburn, VA with Tailscale for secure, WireGuard-encrypted remote access. The existing `docker-compose.yml` works unmodified on the VPS.
 
 - **Canonical endpoint**: `ib-gateway:4001` (Tailscale MagicDNS hostname, survives IP changes)
 - **Client config**: `MDW_IB_HOST=ib-gateway` in `.env` or as env var — all scripts use this automatically
-- **Security**: All ports blocked on public interface; IB API, VNC, and SSH accessible only via Tailscale mesh; identity-based ACLs control per-device access
-- **Read-only**: `READ_ONLY_API=yes` enforced for data warehouse safety
+- **Security**: All ports blocked on public interface via ufw; IB API, VNC, and SSH accessible only via Tailscale mesh; identity-based ACLs control per-device access
+- **TCP proxy**: A socat systemd service bridges Tailscale IP traffic to Docker's localhost-bound ports (`tailscale serve --tcp` adds TLS, which is incompatible with IB's raw TCP protocol)
+- **Read-only**: `READ_ONLY_API=no` (current config — supports both read and write operations)
 - **Cutover**: Cold cutover required — IB allows only one active session per login; running two gateways causes session displacement
 - **Break-glass**: Hetzner web console provides browser-based VNC if Tailscale is unreachable
+- **Phone access**: SSH from iOS/Android via Termius to `mdw@ib-gateway` for `docker compose stop/start`
 - **Full setup**: See `docker/ib-gateway/README.md` for provisioning, hardening, Tailscale ACLs, client enrollment, rollback, and 2FA reauth runbook
 
 ## Data Ingestion
@@ -364,3 +366,6 @@ Common traps that derail debugging sessions — check these before investigating
 - **Weekend/holiday runs**: IB returns no data on non-trading days. These are harmless no-ops — don't debug "no data returned" on weekends or holidays.
 - **CBOE volatility fetch**: Volatility indices use CBOE's public API, not IB. If VIX data looks stale, check `fetch_cboe_volatility.py`, not IB connectivity.
 - **Docker vs native Gateway**: Both bind to `127.0.0.1:4001` by default. Don't run both simultaneously — they'll conflict on the port. Set `MDW_IB_HOST`/`MDW_IB_PORT` only when connecting to a remote Docker host.
+- **Cloud gateway + local gateway**: IB allows only one active session per login. Running both causes `EXISTING_SESSION_DETECTED` displacement. Cold cutover only — stop one before starting the other.
+- **Cloud gateway connectivity**: If `ib-gateway:4001` is unreachable, check in order: (1) Tailscale connected locally (`tailscale status`), (2) VPS Tailscale online (`ssh mdw@ib-gateway`), (3) socat proxy running (`sudo systemctl status ib-gateway-proxy`), (4) Docker container healthy (`docker compose ps`). Break-glass: Hetzner web console.
+- **tailscale serve vs socat**: `tailscale serve --tcp` adds TLS which breaks IB's raw TCP protocol. The cloud gateway uses socat systemd services to bridge Tailscale IP traffic to Docker's localhost-bound ports instead.

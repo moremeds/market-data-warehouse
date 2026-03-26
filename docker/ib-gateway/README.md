@@ -98,8 +98,8 @@ The same `docker-compose.yml` runs unmodified on a cloud VPS. Tailscale provides
             |  TAILSCALE INTERFACE (tailscale0: 100.x.y.z)  |
             |    MagicDNS hostname: ib-gateway               |
             |    ufw allows: 22, 4001, 5900 on tailscale0   |
-            |    tailscale serve --tcp=4001 -> localhost:4001 |
-            |    tailscale serve --tcp=5900 -> localhost:5900 |
+            |    socat proxy: tailscale-ip:4001 -> 127.0.0.1:4001
+            |    socat proxy: tailscale-ip:5900 -> 127.0.0.1:5900
             |                                               |
             |  DOCKER (unchanged docker-compose.yml)        |
             |    127.0.0.1:4001 -> container:4003 (SOCAT)   |
@@ -123,11 +123,11 @@ The same `docker-compose.yml` runs unmodified on a cloud VPS. Tailscale provides
 1. IB Gateway binds to `127.0.0.1:4001` inside the container
 2. SOCAT in the container relays container port `4003` -> `127.0.0.1:4001`
 3. Docker Compose maps host `127.0.0.1:4001` -> container `4003`
-4. `tailscale serve` forwards Tailscale mesh traffic on port 4001 -> `127.0.0.1:4001`
+4. A socat systemd service on the VPS forwards `<tailscale-ip>:4001` -> `127.0.0.1:4001`
 5. Tailscale exposes the VPS as `ib-gateway` via MagicDNS
 6. Clients connect to `ib-gateway:4001` via Tailscale tunnel
 
-Docker port bindings remain on `127.0.0.1` (not `0.0.0.0`) — Tailscale handles the bridge.
+Docker port bindings remain on `127.0.0.1` (not `0.0.0.0`). A socat systemd service bridges Tailscale traffic to localhost. (`tailscale serve --tcp` adds TLS which is incompatible with IB's raw TCP protocol.)
 
 ### Prerequisites
 
@@ -201,9 +201,38 @@ rm /tmp/ts-authkey.txt
 # Verify MagicDNS hostname
 tailscale status
 
-# TCP forwarding via tailscale serve
-tailscale serve --tcp=4001 tcp://localhost:4001
-tailscale serve --tcp=5900 tcp://localhost:5900
+# TCP forwarding via socat systemd services
+# (tailscale serve --tcp adds TLS, incompatible with IB's raw TCP protocol)
+TSIP=$(tailscale ip -4)
+
+sudo tee /etc/systemd/system/ib-gateway-proxy.service > /dev/null <<SOCAT
+[Unit]
+Description=IB Gateway TCP proxy (Tailscale -> localhost)
+After=network.target tailscaled.service docker.service
+[Service]
+Type=simple
+ExecStart=/usr/bin/socat TCP-LISTEN:4001,bind=${TSIP},reuseaddr,fork TCP:127.0.0.1:4001
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+SOCAT
+
+sudo tee /etc/systemd/system/ib-gateway-vnc-proxy.service > /dev/null <<SOCAT
+[Unit]
+Description=IB Gateway VNC proxy (Tailscale -> localhost)
+After=network.target tailscaled.service docker.service
+[Service]
+Type=simple
+ExecStart=/usr/bin/socat TCP-LISTEN:5900,bind=${TSIP},reuseaddr,fork TCP:127.0.0.1:5900
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+SOCAT
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now ib-gateway-proxy ib-gateway-vnc-proxy
 
 # Firewall: block everything except Tailscale
 ufw default deny incoming
@@ -221,7 +250,7 @@ After reboot, SSH via Tailscale and verify:
 ```bash
 ssh mdw@ib-gateway
 tailscale status                    # Connected
-tailscale serve status              # tcp:4001 and tcp:5900 forwarding active
+sudo systemctl status ib-gateway-proxy  # socat proxy active
 sudo ufw status                     # tailscale0-only rules
 ```
 
