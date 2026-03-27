@@ -153,7 +153,74 @@ docker compose up -d
 
 ---
 
-### Option 2: Native macOS (IBC)
+### Option 2 (Cloud): Hetzner VPS + Tailscale
+
+Run the same Docker Compose setup on a cloud VPS with Tailscale for secure, WireGuard-encrypted access. No public ports exposed — all traffic flows through a private mesh VPN.
+
+#### Why
+
+* IB Gateway runs 24/5 without tying up a local machine
+* Accessible from any Tailscale-enrolled device (Mac, iPhone, other servers)
+* ~$4-6/mo (Hetzner) + free (Tailscale)
+
+#### Architecture
+
+```text
+Hetzner VPS (all public ports blocked)
+├── Tailscale (MagicDNS hostname: ib-gateway)
+├── socat proxy: tailscale-ip:4001 → localhost:4001
+└── Docker: same docker-compose.yml, unmodified
+        └── IB Gateway (127.0.0.1:4001)
+
+Clients connect to ib-gateway:4001 via Tailscale tunnel
+```
+
+#### Setup
+
+1. **Provision a VPS** (Hetzner CPX11 or similar, Ubuntu 24.04, US East region)
+2. **Harden the host**: non-root user, SSH key-only, disable root login, unattended-upgrades
+3. **Install Docker and Tailscale** on the VPS
+4. **Configure Tailscale**:
+   * Authenticate with a preauth key tagged for the gateway
+   * Enable MagicDNS for stable hostname resolution
+   * Set up ACLs to restrict which devices can reach port 4001
+5. **Bridge Tailscale to Docker**: a socat systemd service forwards traffic from the Tailscale interface to Docker's localhost-bound ports (`tailscale serve --tcp` adds TLS, which is incompatible with IB's raw TCP protocol)
+6. **Firewall**: ufw denies all incoming except on the Tailscale interface
+7. **Deploy**: `scp` the `docker-compose.yml` and `.env` to the VPS, create the password secret, `docker compose up -d`
+8. **2FA**: Approve via IBKR mobile app or VNC through Tailscale
+
+#### Client Configuration
+
+```bash
+# Set in .env or export in shell
+MDW_IB_HOST=ib-gateway    # Tailscale MagicDNS hostname
+MDW_IB_PORT=4001
+```
+
+All scripts (`fetch_ib_historical.py`, `daily_update.py`, etc.) read `MDW_IB_HOST`/`MDW_IB_PORT` automatically.
+
+#### Phone Access
+
+SSH from iOS/Android (Termius, Blink) to `mdw@ib-gateway` via Tailscale:
+
+```bash
+cd ~/ib-gateway
+docker compose stop    # stop gateway
+docker compose start   # start gateway
+docker compose ps      # check status
+```
+
+#### Rollback to Local
+
+```bash
+unset MDW_IB_HOST      # falls back to 127.0.0.1
+```
+
+See [`docker/ib-gateway/README.md`](docker/ib-gateway/README.md) for the full step-by-step provisioning guide, Tailscale ACL policy, client enrollment, 2FA reauth runbook, and volume backup procedures.
+
+---
+
+### Option 3: Native macOS (IBC)
 
 IBC provides:
 
