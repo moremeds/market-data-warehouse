@@ -369,3 +369,43 @@ Common traps that derail debugging sessions — check these before investigating
 - **Cloud gateway + local gateway**: IB allows only one active session per login. Running both causes `EXISTING_SESSION_DETECTED` displacement. Cold cutover only — stop one before starting the other.
 - **Cloud gateway connectivity**: If `ib-gateway:4001` is unreachable, check in order: (1) Tailscale connected locally (`tailscale status`), (2) VPS Tailscale online (`ssh mdw@ib-gateway`), (3) socat proxy running (`sudo systemctl status ib-gateway-proxy`), (4) Docker container healthy (`docker compose ps`). Break-glass: Hetzner web console.
 - **tailscale serve vs socat**: `tailscale serve --tcp` adds TLS which breaks IB's raw TCP protocol. The cloud gateway uses socat systemd services to bridge Tailscale IP traffic to Docker's localhost-bound ports instead.
+
+## Radon API Mode
+
+Scripts can fetch IB historical data via the Radon FastAPI server instead of connecting directly to IB Gateway. This eliminates the need for Tailscale and reduces IB client ID contention.
+
+### Configuration
+
+Set both env vars to enable API mode (in `.env` or shell):
+
+```bash
+MDW_RADON_API_URL=https://app.radon.run/api/ib
+MDW_API_KEY=<64-char-hex-key>
+```
+
+When set, `fetch_ib_historical.py` and `daily_update.py` automatically use the Radon API. If the API is unreachable (connectivity/timeout), they fall back to direct IB Gateway. Auth errors (401/403) fail fast — no silent fallback.
+
+### Architecture
+
+```
+MDW scripts
+  → RadonApiProvider (HTTP, X-API-Key auth)
+    → Radon FastAPI (/historical/bars, /contract/qualify)
+      → IBPool "data" role
+        → IB Gateway (Docker, localhost:4001)
+```
+
+### Provider Interface
+
+`clients/historical_provider.py` defines:
+- `HistoricalProvider` — abstract interface
+- `IBProvider` — direct IB Gateway via ib_insync
+- `RadonApiProvider` — HTTP calls to Radon FastAPI
+- `IBClientAdapter` — makes RadonApiProvider drop-in compatible with existing script code
+- `create_ib_client_or_adapter()` — factory that auto-selects based on env vars
+
+### Date Formats
+
+All dates are ISO format:
+- Bar dates: `YYYY-MM-DD` (e.g., `2025-01-02`)
+- Head timestamps: ISO 8601 datetime (e.g., `2010-01-04T09:30:00`)
