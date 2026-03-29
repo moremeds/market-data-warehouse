@@ -57,6 +57,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from clients.bronze_client import BronzeClient
 from clients.ib_client import IBClient, IBError
+from clients.historical_provider import create_ib_client_or_adapter
 
 _DEFAULT_STORAGE_CLIENT = BronzeClient
 DBClient = BronzeClient
@@ -572,7 +573,7 @@ def main():
     asset_class = args.asset_class
     bronze_dir = DATA_LAKE / "bronze" / f"asset_class={asset_class}"
 
-    with IBClient() as ib, _storage_client()(bronze_dir=bronze_dir, asset_class=asset_class) as bronze:
+    with create_ib_client_or_adapter(host=args.host, port=args.port) as ib, _storage_client()(bronze_dir=bronze_dir, asset_class=asset_class) as bronze:
         ib.connect(host=args.host, port=args.port)
 
         if args.backfill:
