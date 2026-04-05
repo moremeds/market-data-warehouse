@@ -4,7 +4,10 @@
 Usage:
     python entrypoint.py                    # Start scheduler (daily at configured time)
     python entrypoint.py --now              # Run once immediately, then exit
-    python entrypoint.py --seed --preset presets/sp500.json  # Initial backfill + upload
+    python entrypoint.py --now --force      # Run once, skip trading day check
+    python entrypoint.py --seed --preset presets/sp500.json          # Initial backfill + upload
+    python entrypoint.py --seed --preset presets/sp500.json --force  # Seed with --skip-existing off
+    python entrypoint.py --rebuild --preset presets/sp500.json       # Wipe bronze + reseed + rebuild DuckDB + upload
 """
 
 from __future__ import annotations
@@ -64,14 +67,58 @@ def run_daily_update(force: bool = False) -> int:
     return _run_cmd(cmd, "Daily update")
 
 
-def run_seed(preset: str, years: int = 10) -> int:
+def run_seed(preset: str, years: int = 10, skip_existing: bool = True) -> int:
     """Run initial backfill from a preset."""
     cmd = [
         _python(), str(SCRIPTS_DIR / "fetch_ib_historical.py"),
         "--preset", preset,
         "--years", str(years),
     ]
+    if skip_existing:
+        cmd.append("--skip-existing")
     return _run_cmd(cmd, f"Seed ({preset})")
+
+
+def run_rebuild_duckdb() -> int:
+    """Rebuild DuckDB from bronze parquet."""
+    return _run_cmd([_python(), str(SCRIPTS_DIR / "rebuild_duckdb_from_parquet.py")], "DuckDB rebuild")
+
+
+def run_rebuild(preset: str, years: int = 10) -> int:
+    """Full rebuild: wipe bronze → seed from IB → rebuild DuckDB → upload to R2."""
+    import shutil
+
+    bronze_dir = APP_DIR / "data-lake" / "bronze"
+    warehouse_dir = Path(os.getenv("MDW_WAREHOUSE_DIR", str(Path.home() / "market-warehouse")))
+    bronze_dir_real = warehouse_dir / "data-lake" / "bronze"
+
+    logger.info("=== Starting full rebuild ===")
+
+    # Step 1: Wipe local bronze
+    if bronze_dir_real.exists():
+        logger.info("Wiping %s", bronze_dir_real)
+        shutil.rmtree(bronze_dir_real)
+        bronze_dir_real.mkdir(parents=True)
+
+    # Step 2: Seed from IB (no skip-existing since we wiped)
+    rc = run_seed(preset, years, skip_existing=False)
+    if rc != 0:
+        logger.error("Seed failed (rc=%d), aborting rebuild", rc)
+        return rc
+
+    # Step 3: Rebuild DuckDB
+    rc = run_rebuild_duckdb()
+    if rc != 0:
+        logger.error("DuckDB rebuild failed (rc=%d), continuing to upload", rc)
+
+    # Step 4: Upload to R2
+    upload_rc = sync_upload()
+    if upload_rc != 0:
+        logger.error("R2 upload failed (rc=%d)", upload_rc)
+        return upload_rc
+
+    logger.info("=== Full rebuild complete ===")
+    return 0
 
 
 def run_job_cycle(force: bool = False) -> int:
@@ -124,17 +171,24 @@ def scheduler_loop(hour: int, minute: int, tz: ZoneInfo) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="MDW container entrypoint")
     parser.add_argument("--now", action="store_true", help="Run once immediately, then exit")
-    parser.add_argument("--force", action="store_true", help="Force run on non-trading days")
-    parser.add_argument("--seed", action="store_true", help="Run initial backfill")
-    parser.add_argument("--preset", type=str, help="Preset file for --seed (e.g. presets/sp500.json)")
-    parser.add_argument("--years", type=int, default=10, help="Years of history for --seed (default: 10)")
+    parser.add_argument("--force", action="store_true", help="Force run (skip trading day check, skip-existing off for seed)")
+    parser.add_argument("--seed", action="store_true", help="Run initial backfill + upload")
+    parser.add_argument("--rebuild", action="store_true", help="Wipe bronze, reseed from IB, rebuild DuckDB, upload to R2")
+    parser.add_argument("--preset", type=str, help="Preset file for --seed/--rebuild")
+    parser.add_argument("--years", type=int, default=10, help="Years of history for --seed/--rebuild (default: 10)")
     args = parser.parse_args()
+
+    if args.rebuild:
+        if not args.preset:
+            logger.error("--rebuild requires --preset")
+            return 1
+        return run_rebuild(args.preset, args.years)
 
     if args.seed:
         if not args.preset:
             logger.error("--seed requires --preset")
             return 1
-        rc = run_seed(args.preset, args.years)
+        rc = run_seed(args.preset, args.years, skip_existing=not args.force)
         if rc == 0:
             sync_upload()
         return rc
