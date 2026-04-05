@@ -26,7 +26,7 @@ services:
       dockerfile: docker/ibroker-mkt-data/Dockerfile
     network_mode: host
     environment:
-      MDW_IB_HOST: ${MDW_IB_HOST:-host.docker.internal}
+      MDW_IB_HOST: host.docker.internal  # Always use Docker-to-host bridge (not .env)
       MDW_IB_PORT: ${MDW_IB_PORT:-4001}
       MDW_WAREHOUSE_DIR: /tmp/data-lake
       MDW_DATA_LAKE: /tmp/data-lake
