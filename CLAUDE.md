@@ -13,7 +13,7 @@ market-data-warehouse/              # Git repo
 │   ├── bronze_client.py            # Canonical per-ticker bronze parquet client
 │   ├── daily_bar_fallback.py       # Public daily-bar fallback chain for U.S. equities/ETFs
 │   ├── ib_client.py                # Interactive Brokers API client (ib_async)
-│   ├── historical_provider.py       # HistoricalProvider abstraction (IBProvider, RadonApiProvider, IBClientAdapter)
+│   ├── historical_provider.py       # HistoricalProvider abstraction (IBProvider, contract spec helpers)
 │   ├── uw_client.py                # Unusual Whales REST API client (kept, not used for historical)
 │   └── db_client.py                # DuckDB client for md.* schema
 ├── presets/
@@ -48,7 +48,7 @@ market-data-warehouse/              # Git repo
 │   ├── test_fetch_ib_historical.py # Tests for IB fetch script
 │   ├── test_daily_update.py        # Tests for daily update script
 │   ├── test_ib_client.py           # Focused tests for IB client connect fallback
-│   └── test_historical_provider.py # Tests for HistoricalProvider, RadonApiProvider, IBClientAdapter
+│   └── test_historical_provider.py # Tests for HistoricalProvider, contract spec helpers
 ├── pyproject.toml                  # pytest config, coverage enforcement
 ├── .env.example
 └── README.md
@@ -140,7 +140,7 @@ IB Gateway runs on a Hetzner CPX11 VPS (~$4-6/mo) in Ashburn, VA with Tailscale 
 - **Read-only**: `READ_ONLY_API=no` (current config — supports both read and write operations)
 - **Cutover**: Cold cutover required — IB allows only one active session per login; running two gateways causes session displacement
 - **Break-glass**: Hetzner web console provides browser-based VNC if Tailscale is unreachable
-- **Phone access**: SSH from iOS/Android via Termius to `radon@ib-gateway` for `docker compose stop/start`
+- **Phone access**: SSH from iOS/Android via Termius to `ib-gateway` for `docker compose stop/start`
 - **Full setup**: See `docker/ib-gateway/README.md` for provisioning, hardening, Tailscale ACLs, client enrollment, rollback, and 2FA reauth runbook
 
 ## Data Ingestion
@@ -369,45 +369,17 @@ Common traps that derail debugging sessions — check these before investigating
 - **CBOE volatility fetch**: Volatility indices use CBOE's public API, not IB. If VIX data looks stale, check `fetch_cboe_volatility.py`, not IB connectivity.
 - **Docker vs native Gateway**: Both bind to `127.0.0.1:4001` by default. Don't run both simultaneously — they'll conflict on the port. Set `MDW_IB_HOST`/`MDW_IB_PORT` only when connecting to a remote Docker host.
 - **Cloud gateway + local gateway**: IB allows only one active session per login. Running both causes `EXISTING_SESSION_DETECTED` displacement. Cold cutover only — stop one before starting the other.
-- **Cloud gateway connectivity**: If `ib-gateway:4001` is unreachable, check in order: (1) Tailscale connected locally (`tailscale status`), (2) VPS Tailscale online (`ssh radon@ib-gateway`), (3) socat proxy running (`sudo systemctl status ib-gateway-proxy`), (4) Docker container healthy (`docker compose -f /home/radon/radon-cloud/docker-compose.yml ps`). Break-glass: Hetzner web console.
-- **Cloud gateway health check**: The `nc` binary is not available inside the IB Gateway container image (`ghcr.io/gnzsnz/ib-gateway`), so Docker health checks using `nc -z` always fail. The container will show `(unhealthy)` even when IB Gateway is running normally. Check connectivity from the host with `nc -z 127.0.0.1 4001` or via the Radon API health endpoint instead.
-- **Radon API pool init**: Radon's IB pool connects during the FastAPI lifespan. If the IB Gateway container restarts, kill the Radon API process (`kill $(pgrep -f 'uvicorn scripts.api.server')`) and let systemd restart it so the pool reconnects. The health endpoint (`/health`) may show the pool as connected while route handlers report "IB pool not initialized" if the module was loaded under a different sys.modules key — a full process restart resolves this.
+- **Cloud gateway connectivity**: If `ib-gateway:4001` is unreachable, check in order: (1) Tailscale connected locally (`tailscale status`), (2) VPS Tailscale online (`ssh ib-gateway`), (3) socat proxy running (`sudo systemctl status ib-gateway-proxy`), (4) Docker container healthy. Break-glass: Hetzner web console.
+- **Cloud gateway health check**: The `nc` binary is not available inside the IB Gateway container image (`ghcr.io/gnzsnz/ib-gateway`), so Docker health checks using `nc -z` always fail. The container will show `(unhealthy)` even when IB Gateway is running normally. Check connectivity from the host with `nc -z 127.0.0.1 4001`.
 - **tailscale serve vs socat**: `tailscale serve --tcp` adds TLS which breaks IB's raw TCP protocol. The cloud gateway uses socat systemd services to bridge Tailscale IP traffic to Docker's localhost-bound ports instead.
 
-## Radon API Mode
-
-Scripts can fetch IB historical data via the Radon FastAPI server instead of connecting directly to IB Gateway. This is the preferred path — it eliminates the need for a local Tailscale connection, reduces IB client ID contention, and routes through Caddy with TLS on the VPS.
-
-### Configuration
-
-Set both env vars to enable API mode (in `.env` or shell):
-
-```bash
-MDW_RADON_API_URL=https://app.radon.run/api/ib
-MDW_API_KEY=<64-char-hex-key>
-```
-
-When set, `fetch_ib_historical.py` and `daily_update.py` automatically use the Radon API. If the API is unreachable (connectivity/timeout), they fall back to direct IB Gateway. Auth errors (401/403) fail fast — no silent fallback.
-
-### Architecture
-
-```
-MDW scripts
-  → RadonApiProvider (HTTP, X-API-Key auth)
-    → Caddy (TLS, app.radon.run, handle_path /api/ib/* → localhost:8321)
-      → Radon FastAPI / uvicorn (/historical/bars, /contract/qualify)
-        → IBPool "data" role (client_id=5)
-          → IB Gateway (Docker, localhost:4001)
-```
-
-### Provider Interface
+## Provider Interface
 
 `clients/historical_provider.py` defines:
-- `HistoricalProvider` — abstract interface
-- `IBProvider` — direct IB Gateway via ib_async
-- `RadonApiProvider` — HTTP calls to Radon FastAPI
-- `IBClientAdapter` — makes RadonApiProvider drop-in compatible with existing script code
-- `create_ib_client_or_adapter()` — factory that auto-selects based on env vars
+- `HistoricalProvider` — abstract interface for fetching IB historical data
+- `IBProvider` — direct IB Gateway connection via ib_async
+- `BarRecord` — OHLCV bar dataclass
+- `ib_contract_to_spec()` / `spec_to_ib_contract()` — contract serialization helpers
 
 ### Date Formats
 
