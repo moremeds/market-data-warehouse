@@ -1,6 +1,8 @@
 DOCKER_USER ?= moremeds
 IMAGE_NAME  ?= ibroker-mkt-data
 TAG         ?= latest
+PRESET      ?= presets/screened-universe.json
+YEARS       ?= 5
 FULL_IMAGE   = $(DOCKER_USER)/$(IMAGE_NAME):$(TAG)
 DOCKERFILE   = docker/ibroker-mkt-data/Dockerfile
 PLATFORMS    = linux/amd64,linux/arm64
@@ -26,13 +28,25 @@ builder:
 		docker buildx create --name $(BUILDER) --use
 	@docker buildx use $(BUILDER)
 
-# Run once immediately
+# Run once immediately (daily update cycle)
 run:
 	docker compose run --rm ibroker-mkt-data --now
 
-# Seed initial data
+# Run once, force (skip trading day check)
+run-force:
+	docker compose run --rm ibroker-mkt-data --now --force
+
+# Seed initial data (skip existing tickers)
 seed:
-	docker compose run --rm ibroker-mkt-data --seed --preset presets/sp500.json
+	docker compose run --rm ibroker-mkt-data --seed --preset $(PRESET) --years $(YEARS)
+
+# Seed, force re-download all tickers
+seed-force:
+	docker compose run --rm ibroker-mkt-data --seed --preset $(PRESET) --years $(YEARS) --force
+
+# Full rebuild: wipe bronze → seed → rebuild DuckDB → upload R2
+rebuild:
+	docker compose run --rm ibroker-mkt-data --rebuild --preset $(PRESET) --years $(YEARS)
 
 # Start scheduler (background)
 up:
