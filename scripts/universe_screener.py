@@ -164,50 +164,54 @@ def log_changes(
 async def run_scanner_sweeps(ib) -> set[str]:
     """Run multiple IB scanner sweeps and return a deduplicated set of tickers.
 
-    Uses ``abovePrice`` tiers instead of ``marketCapAbove`` because IB's
-    market-cap filter returns empty results outside trading hours.
-    Multiple scan types × price tiers produce a diverse, liquid universe.
+    IB caps each scan at 50 results, so we use **tight price bands** to force
+    non-overlapping result sets within each scan type.  Five scan types × eight
+    price bands = 40 sweeps → ~1,000+ unique tickers.
+
+    ``marketCapAbove`` is avoided because IB returns empty results for that
+    filter outside trading hours.
     """
     from ib_async import ScannerSubscription  # lazy import
 
-    # (scan_code, abovePrice, numberOfRows)
-    # Price tiers act as a rough cap proxy: >$50 ≈ large, >$20 ≈ mid, >$5 ≈ small
-    sweeps = [
-        # Dollar volume — naturally large-cap biased
-        ("MOST_ACTIVE_USD", 50.0, 50),
-        ("MOST_ACTIVE_USD", 20.0, 50),
-        ("MOST_ACTIVE_USD", 5.0,  50),
-        # Share volume — catches high-activity names across caps
-        ("MOST_ACTIVE", 50.0, 50),
-        ("MOST_ACTIVE", 20.0, 50),
-        ("MOST_ACTIVE", 5.0,  50),
-        # Trade count — high turnover / retail-heavy names
-        ("TOP_TRADE_COUNT", 50.0, 50),
-        ("TOP_TRADE_COUNT", 20.0, 50),
-        ("TOP_TRADE_COUNT", 5.0,  50),
-        # Hot by volume — momentum / news-driven
-        ("HOT_BY_VOLUME", 10.0, 50),
-        # Top % gainers — captures names with unusual activity
-        ("TOP_PERC_GAIN", 5.0, 50),
+    scan_codes = [
+        "MOST_ACTIVE",       # Share volume — broad coverage
+        "MOST_ACTIVE_USD",   # Dollar volume — large-cap biased
+        "TOP_TRADE_COUNT",   # Trade frequency — high turnover
+        "HOT_BY_VOLUME",     # Volume vs avg — momentum / news-driven
+        "TOP_PERC_GAIN",     # Price movers — captures unusual activity
+    ]
+
+    # Tight price bands prevent overlap within each scan type
+    price_bands: list[tuple[float, float]] = [
+        (200.0, 1e6),
+        (100.0, 200.0),
+        (50.0, 100.0),
+        (30.0, 50.0),
+        (20.0, 30.0),
+        (15.0, 20.0),
+        (10.0, 15.0),
+        (5.0, 10.0),
     ]
 
     symbols: set[str] = set()
 
-    for scan_code, above_price, num_rows in sweeps:
-        sub = ScannerSubscription(
-            instrument="STK",
-            locationCode="STK.US.MAJOR",
-            scanCode=scan_code,
-            numberOfRows=num_rows,
-        )
-        sub.abovePrice = above_price
-        try:
-            results = await ib.reqScannerDataAsync(sub)
-        except Exception:
-            results = []
-        if results:
-            for item in results:
-                symbols.add(item.contractDetails.contract.symbol)
+    for scan_code in scan_codes:
+        for above_price, below_price in price_bands:
+            sub = ScannerSubscription(
+                instrument="STK",
+                locationCode="STK.US.MAJOR",
+                scanCode=scan_code,
+                numberOfRows=50,
+            )
+            sub.abovePrice = above_price
+            sub.belowPrice = below_price
+            try:
+                results = await ib.reqScannerDataAsync(sub)
+            except Exception:
+                results = []
+            if results:
+                for item in results:
+                    symbols.add(item.contractDetails.contract.symbol)
 
     return symbols
 
