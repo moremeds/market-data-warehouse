@@ -39,7 +39,7 @@ import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from ib_insync import Future, Index, Stock
+from ib_async import Future, Index, Stock
 from rich.console import Console
 from rich.logging import RichHandler
 

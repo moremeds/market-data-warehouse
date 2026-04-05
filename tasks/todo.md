@@ -30,8 +30,8 @@ Use this file for the current task only. Replace it at the start of each non-tri
 - Verification:
   - `/opt/homebrew/bin/python3.13 -V`
   - `~/market-warehouse/.venv/bin/python -V`
-  - `~/market-warehouse/.venv/bin/python -m pip show rich ib-insync duckdb`
-  - `~/market-warehouse/.venv/bin/python -c 'import rich, ib_insync, polars, pyarrow, duckdb, requests, pandas; print("imports-ok")'`
+  - `~/market-warehouse/.venv/bin/python -m pip show rich ib-async duckdb`
+  - `~/market-warehouse/.venv/bin/python -c 'import rich, ib_async, polars, pyarrow, duckdb, requests, pandas; print("imports-ok")'`
 - Residual risk:
   - Your shell-wide `python` and `python3` defaults still point at older interpreters unless you update your PATH; only the repo venv is now on 3.13.
   - The old frozen dependency list referenced an obsolete editable `doob` Python package path; that line was intentionally dropped because the current `doob` checkout is not a Python package.

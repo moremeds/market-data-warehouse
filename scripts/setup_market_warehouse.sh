@@ -133,7 +133,7 @@ green "Installing base packages..."
 brew install \
   duckdb \
   clickhouse \
-  python@3.12 \
+  python@3.13 \
   uv \
   jq \
   wget \
@@ -187,10 +187,10 @@ mkdir -p \
 # Python environment
 ########################################
 green "Creating Python virtual environment..."
-if [[ -x /opt/homebrew/bin/python3.12 ]]; then
-  /opt/homebrew/bin/python3.12 -m venv "${PY_ENV_DIR}"
+if [[ -x /opt/homebrew/bin/python3.13 ]]; then
+  /opt/homebrew/bin/python3.13 -m venv "${PY_ENV_DIR}"
 else
-  python3.12 -m venv "${PY_ENV_DIR}"
+  python3.13 -m venv "${PY_ENV_DIR}"
 fi
 
 # shellcheck disable=SC1091
@@ -208,6 +208,8 @@ pip install \
   scipy \
   python-dotenv \
   rich \
+  ib-async \
+  httpx \
   ipython \
   jupyterlab
 

@@ -300,7 +300,7 @@ tailscale status                          # Should show ib-gateway
 nc -z ib-gateway 4001                     # TCP connectivity
 
 python3 -c "
-from ib_insync import IB
+from ib_async import IB
 ib = IB()
 ib.connect('ib-gateway', 4001, clientId=99)
 print('Server time:', ib.reqCurrentTime())
@@ -349,7 +349,7 @@ Cold cutover only — IB allows one active session per login. Running two gatewa
 
 # 2. Verify cloud gateway
 python3 -c "
-from ib_insync import IB
+from ib_async import IB
 ib = IB()
 ib.connect('ib-gateway', 4001, clientId=99)
 print('Server time:', ib.reqCurrentTime())
@@ -400,7 +400,7 @@ unset MDW_IB_HOST   # Falls back to 127.0.0.1 default
 ~/ibc/bin/start-secure-ibc-service.sh
 
 python3 -c "
-from ib_insync import IB
+from ib_async import IB
 ib = IB()
 ib.connect('127.0.0.1', 4001, clientId=99)
 print('Server time:', ib.reqCurrentTime())

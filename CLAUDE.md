@@ -12,7 +12,7 @@ market-data-warehouse/              # Git repo
 │   ├── __init__.py                 # Exports BronzeClient, DailyBarFallbackClient, IBClient, DBClient
 │   ├── bronze_client.py            # Canonical per-ticker bronze parquet client
 │   ├── daily_bar_fallback.py       # Public daily-bar fallback chain for U.S. equities/ETFs
-│   ├── ib_client.py                # Interactive Brokers API client (ib_insync)
+│   ├── ib_client.py                # Interactive Brokers API client (ib_async)
 │   ├── historical_provider.py       # HistoricalProvider abstraction (IBProvider, RadonApiProvider, IBClientAdapter)
 │   ├── uw_client.py                # Unusual Whales REST API client (kept, not used for historical)
 │   └── db_client.py                # DuckDB client for md.* schema
@@ -54,7 +54,7 @@ market-data-warehouse/              # Git repo
 └── README.md
 
 ~/market-warehouse/                 # Data warehouse (created by setup script)
-├── .venv/                          # Python 3.12 venv
+├── .venv/                          # Python 3.13 venv
 ├── data-lake/
 │   ├── bronze/asset_class=equity/  # Per-ticker Hive-partitioned Parquet (symbol=AAPL/data.parquet)
 │   ├── bronze/asset_class=futures/ # Per-contract Hive-partitioned Parquet (symbol=ES_202506/data.parquet)
@@ -145,9 +145,9 @@ IB Gateway runs on a Hetzner CPX11 VPS (~$4-6/mo) in Ashburn, VA with Tailscale 
 
 ## Data Ingestion
 
-Data source: **Interactive Brokers** via `ib_insync`. Requires IB Gateway running on a reachable endpoint (default `127.0.0.1:4001`), either natively via the macOS IBC service or via Docker.
+Data source: **Interactive Brokers** via `ib_async`. Requires IB Gateway running on a reachable endpoint (default `127.0.0.1:4001`), either natively via the macOS IBC service or via Docker.
 
-- `IBClient` wraps `ib_insync.IB` with connection management, historical data, and contract qualification
+- `IBClient` wraps `ib_async.IB` with connection management, historical data, and contract qualification
 - `IBClient.connect()` defaults to `clientId=0` and automatically retries successive `clientId` values if IB reports error `326` (`client id already in use`)
 - `IBClient.get_historical_data()` fetches daily bars via `reqHistoricalData`
 - `BronzeClient` is the live service storage client: it discovers symbols from parquet, merges or replaces per-ticker snapshots, and publishes with `temp -> validate -> os.replace()`
@@ -404,7 +404,7 @@ MDW scripts
 
 `clients/historical_provider.py` defines:
 - `HistoricalProvider` — abstract interface
-- `IBProvider` — direct IB Gateway via ib_insync
+- `IBProvider` — direct IB Gateway via ib_async
 - `RadonApiProvider` — HTTP calls to Radon FastAPI
 - `IBClientAdapter` — makes RadonApiProvider drop-in compatible with existing script code
 - `create_ib_client_or_adapter()` — factory that auto-selects based on env vars

@@ -3,7 +3,7 @@
 Defines a clean interface for fetching IB historical data, with two
 implementations:
 
-- IBProvider: direct IB Gateway connection via ib_insync
+- IBProvider: direct IB Gateway connection via ib_async
 - RadonApiProvider: HTTP calls to Radon FastAPI historical endpoints
 
 Usage:
@@ -43,7 +43,7 @@ class BarRecord:
 # ---------------------------------------------------------------------------
 
 def ib_contract_to_spec(contract) -> dict:
-    """Convert an ib_insync contract to a JSON-safe spec dict."""
+    """Convert an ib_async contract to a JSON-safe spec dict."""
     spec = {
         "sec_type": contract.secType or "STK",
         "symbol": contract.symbol,
@@ -57,8 +57,8 @@ def ib_contract_to_spec(contract) -> dict:
 
 
 def spec_to_ib_contract(spec: dict):
-    """Convert a spec dict to an ib_insync contract."""
-    from ib_insync import Stock, Future, Index
+    """Convert a spec dict to an ib_async contract."""
+    from ib_async import Stock, Future, Index
 
     sec_type = spec.get("sec_type", "STK")
     symbol = spec["symbol"]
@@ -260,7 +260,7 @@ class _FakeIB:
         return list(contracts)
 
     def run(self, coro):
-        """Run an async coroutine — replacement for ib_insync's event loop runner."""
+        """Run an async coroutine — replacement for ib_async's event loop runner."""
         loop = asyncio.new_event_loop()
         try:
             return loop.run_until_complete(coro)

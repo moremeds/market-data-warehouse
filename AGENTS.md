@@ -38,7 +38,7 @@ Current live shape:
 
 ## Coding Expectations
 
-- Prefer Python 3.12-compatible code.
+- Prefer Python 3.13-compatible code.
 - Preserve the current parquet-first write path.
 - Keep data integrity explicit: validate before publish, keep atomic file replacement semantics intact.
 - Keep runtime behavior observable. If you add a recovery path or new branch, expose enough counters or logs to make it diagnosable.

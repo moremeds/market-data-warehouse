@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fetch historical daily OHLCV data from Interactive Brokers into bronze parquet.
 
-Parallelises requests using ib_insync's async API with a semaphore to respect
+Parallelises requests using ib_async's async API with a semaphore to respect
 IB's pacing limit (~6 concurrent historical-data requests).
 
 Publishes:
@@ -46,7 +46,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from ib_insync import Future, Index, Stock
+from ib_async import Future, Index, Stock
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn

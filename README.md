@@ -90,7 +90,7 @@ Raw → Bronze → Silver → Gold
 
 * macOS (Apple Silicon recommended)
 * Homebrew
-* Python 3.12+
+* Python 3.13+
 * Node.js 22+
 * DuckDB
 * [Interactive Brokers](https://ibkr.com/referral/joseph5632) account

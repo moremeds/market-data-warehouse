@@ -1,6 +1,6 @@
 """Comprehensive Interactive Brokers API client.
 
-Wraps ``ib_insync.IB`` with connection management, order operations,
+Wraps ``ib_async.IB`` with connection management, order operations,
 market data, portfolio queries, fill monitoring, and Flex Query support.
 
 Usage::
@@ -26,7 +26,7 @@ import logging
 import time
 from typing import Any, List, Optional, Sequence
 
-from ib_insync import IB, FlexReport, Option
+from ib_async import IB, FlexReport, Option
 
 # ---------------------------------------------------------------------------
 # Exception hierarchy
@@ -111,7 +111,7 @@ logger = logging.getLogger("ib_client")
 class IBClient:
     """High-level Interactive Brokers API client.
 
-    Wraps ``ib_insync.IB`` with:
+    Wraps ``ib_async.IB`` with:
     - Connection lifecycle (connect / disconnect / reconnect)
     - Context manager support
     - Client ID registry lookup
@@ -137,7 +137,7 @@ class IBClient:
 
     @property
     def ib(self) -> IB:
-        """Return the underlying ``ib_insync.IB`` instance."""
+        """Return the underlying ``ib_async.IB`` instance."""
         return self._ib
 
     # -- connection lifecycle -----------------------------------------------
