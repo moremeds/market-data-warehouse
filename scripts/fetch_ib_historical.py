@@ -72,7 +72,7 @@ def _storage_client():
 
 # ── Config ─────────────────────────────────────────────────────────────
 
-DATA_LAKE = Path.home() / "market-warehouse" / "data-lake"
+DATA_LAKE = Path(os.getenv("MDW_DATA_LAKE", str(Path.home() / "market-warehouse" / "data-lake")))
 BRONZE_DIR = DATA_LAKE / "bronze" / "asset_class=equity"
 CURSOR_DIR = Path.home() / "market-warehouse" / "logs"
 

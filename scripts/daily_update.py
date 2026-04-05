@@ -78,7 +78,7 @@ def _fallback_client():
 
 # ── Config ─────────────────────────────────────────────────────────────
 
-DATA_LAKE = Path.home() / "market-warehouse" / "data-lake"
+DATA_LAKE = Path(os.getenv("MDW_DATA_LAKE", str(Path.home() / "market-warehouse" / "data-lake")))
 BRONZE_DIR = DATA_LAKE / "bronze" / "asset_class=equity"
 
 console = Console()
@@ -741,6 +741,10 @@ def main():
             console.print(f"  ... and {len(total_issues) - 20} more")
     console.print()
 
+    if tickers_failed > 0:
+        return 1
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

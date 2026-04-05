@@ -1,4 +1,5 @@
 .env
+secrets/ib_password.txt
 __pycache__/
 *.pyc
 *.pyo
