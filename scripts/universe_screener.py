@@ -48,6 +48,7 @@ TARGET_SIZE = 1000
 GRACE_DAYS = 3
 MAX_REMOVALS = 50
 EMAIL_THRESHOLD = 10
+_SCANNER_THROTTLE_SECONDS = 1.0
 
 _WAREHOUSE_DIR = Path(os.getenv("MDW_WAREHOUSE_DIR", str(Path.home() / "market-warehouse")))
 _DATA_LAKE = _WAREHOUSE_DIR / "data-lake"
@@ -207,11 +208,14 @@ async def run_scanner_sweeps(ib) -> set[str]:
             sub.belowPrice = below_price
             try:
                 results = await ib.reqScannerDataAsync(sub)
-            except Exception:
+            except Exception as exc:
+                log.warning("Scanner %s $%.0f-$%.0f failed: %s", scan_code, above_price, below_price, exc)
                 results = []
             if results:
                 for item in results:
                     symbols.add(item.contractDetails.contract.symbol)
+            # IB limits concurrent scanner subscriptions; throttle to avoid error 162
+            await asyncio.sleep(_SCANNER_THROTTLE_SECONDS)
 
     return symbols
 

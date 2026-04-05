@@ -211,7 +211,8 @@ class TestLogChanges:
 
 
 class TestRunScannerSweeps:
-    def test_returns_union_of_scanner_results(self):
+    def test_returns_union_of_scanner_results(self, monkeypatch):
+        monkeypatch.setattr("scripts.universe_screener._SCANNER_THROTTLE_SECONDS", 0)
         ib = MagicMock()
         # Return different symbols for different calls
         call_count = 0
@@ -232,7 +233,8 @@ class TestRunScannerSweeps:
         assert "AAPL" in result
         assert "MSFT" in result
 
-    def test_deduplicates_results(self):
+    def test_deduplicates_results(self, monkeypatch):
+        monkeypatch.setattr("scripts.universe_screener._SCANNER_THROTTLE_SECONDS", 0)
         ib = MagicMock()
 
         async def fake_req_scanner(sub):
@@ -316,6 +318,11 @@ def _make_mock_ib_client(symbols=None):
 
 
 class TestMain:
+    @pytest.fixture(autouse=True)
+    def _no_scanner_throttle(self, monkeypatch):
+        """Disable scanner throttle in all TestMain tests."""
+        monkeypatch.setattr("scripts.universe_screener._SCANNER_THROTTLE_SECONDS", 0)
+
     def test_not_trading_day_exits(self, tmp_path, monkeypatch):
         """Script exits 0 on non-trading day without --force."""
         monkeypatch.setattr("scripts.universe_screener._DATA_LAKE", tmp_path / "data-lake")
