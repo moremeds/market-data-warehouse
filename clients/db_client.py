@@ -19,6 +19,7 @@ from typing import Any, Optional
 
 import duckdb
 
+from clients.bronze_client import PARQUET_FILENAME
 from clients.symbol_ids import stable_symbol_id
 
 log = logging.getLogger(__name__)
@@ -305,13 +306,13 @@ class DBClient:
     def write_ticker_parquet(self, symbol: str, symbol_id: int, bronze_dir: str | Path) -> Path:
         """Write all equities_daily rows for a ticker to a per-ticker Parquet file.
 
-        Layout: bronze_dir/symbol=AAPL/data.parquet (Hive-partitioned).
+        Layout: bronze_dir/symbol=AAPL/1d.parquet (Hive-partitioned).
         Returns the path written.
         """
         bronze_dir = Path(bronze_dir)
         ticker_dir = bronze_dir / f"symbol={symbol}"
         ticker_dir.mkdir(parents=True, exist_ok=True)
-        out_path = ticker_dir / "data.parquet"
+        out_path = ticker_dir / PARQUET_FILENAME
         self._conn.execute(
             f"COPY (SELECT e.trade_date, e.symbol_id, e.open, e.high, e.low, "
             f"e.close, e.adj_close, e.volume "
@@ -331,8 +332,8 @@ class DBClient:
     ) -> dict[str, int]:
         """Rebuild md.symbols and md.equities_daily from bronze parquet."""
         bronze_dir = Path(bronze_dir)
-        parquet_files = list(bronze_dir.glob("symbol=*/data.parquet"))
-        parquet_glob = str(bronze_dir / "symbol=*/data.parquet").replace("'", "''")
+        parquet_files = list(bronze_dir.glob(f"symbol=*/{PARQUET_FILENAME}"))
+        parquet_glob = str(bronze_dir / f"symbol=*/{PARQUET_FILENAME}").replace("'", "''")
 
         self._conn.execute("BEGIN")
         try:
@@ -389,8 +390,8 @@ class DBClient:
     ) -> dict[str, int]:
         """Rebuild md.futures_daily from bronze futures parquet."""
         bronze_dir = Path(bronze_dir)
-        parquet_files = list(bronze_dir.glob("symbol=*/data.parquet"))
-        parquet_glob = str(bronze_dir / "symbol=*/data.parquet").replace("'", "''")
+        parquet_files = list(bronze_dir.glob(f"symbol=*/{PARQUET_FILENAME}"))
+        parquet_glob = str(bronze_dir / f"symbol=*/{PARQUET_FILENAME}").replace("'", "''")
 
         self._conn.execute("BEGIN")
         try:

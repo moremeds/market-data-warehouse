@@ -379,7 +379,7 @@ class TestWriteTickerParquet:
         )
         bronze = tmp_path / "bronze"
         result = db.write_ticker_parquet("AAPL", sid, bronze)
-        expected = bronze / "symbol=AAPL" / "data.parquet"
+        expected = bronze / "symbol=AAPL" / "1d.parquet"
         assert result == expected
         assert expected.exists()
         assert expected.stat().st_size > 0
@@ -516,7 +516,7 @@ class TestStorageCompatibility:
 
         broken_bronze = tmp_path / "bronze" / "symbol=AAPL"
         broken_bronze.mkdir(parents=True, exist_ok=True)
-        (broken_bronze / "data.parquet").write_text("not parquet")
+        (broken_bronze / "1d.parquet").write_text("not parquet")
 
         with pytest.raises(Exception):
             db.replace_equities_from_parquet(tmp_path / "bronze")
@@ -605,7 +605,7 @@ class TestFuturesDaily:
     def test_replace_futures_from_parquet_rollback_on_error(self, db, tmp_path):
         broken_bronze = tmp_path / "bronze" / "symbol=ES_202506"
         broken_bronze.mkdir(parents=True, exist_ok=True)
-        (broken_bronze / "data.parquet").write_text("not parquet")
+        (broken_bronze / "1d.parquet").write_text("not parquet")
 
         with pytest.raises(Exception):
             db.replace_futures_from_parquet(tmp_path / "bronze")
