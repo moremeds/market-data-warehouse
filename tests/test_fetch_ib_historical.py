@@ -792,7 +792,7 @@ class TestMain:
             main()
 
         # Verify per-ticker Parquet written
-        assert (bronze_dir / "symbol=AAPL" / "data.parquet").exists()
+        assert (bronze_dir / "symbol=AAPL" / "1d.parquet").exists()
         # Verify IB connect was called
         mock_ib.connect.assert_called_once()
         # Verify cursor was saved
@@ -1271,7 +1271,7 @@ class TestMain:
             main()
 
         # Verify parquet written to volatility dir
-        assert (vol_bronze_dir / "symbol=VIX" / "data.parquet").exists()
+        assert (vol_bronze_dir / "symbol=VIX" / "1d.parquet").exists()
 
         # Verify cursor was saved
         cursor_file = tmp_path / "cursors" / "cursor_custom.json"

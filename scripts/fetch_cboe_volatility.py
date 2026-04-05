@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sys
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,12 @@ import httpx
 import pyarrow as pa
 import pyarrow.parquet as pq
 from rich.console import Console
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:  # pragma: no cover
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from clients.bronze_client import PARQUET_FILENAME
 
 console = Console()
 
@@ -96,7 +103,7 @@ def write_bronze_parquet(
     """Write table to bronze parquet, merging with existing data."""
     bronze_dir = warehouse_dir / "data-lake" / "bronze" / f"asset_class={ASSET_CLASS}" / f"symbol={symbol}"
     bronze_dir.mkdir(parents=True, exist_ok=True)
-    parquet_path = bronze_dir / "data.parquet"
+    parquet_path = bronze_dir / PARQUET_FILENAME
     
     # Merge with existing data if present
     if parquet_path.exists():

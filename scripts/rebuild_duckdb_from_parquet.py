@@ -14,6 +14,7 @@ from rich.logging import RichHandler
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from clients.bronze_client import PARQUET_FILENAME
 from clients.db_client import DBClient
 
 DATA_LAKE = Path.home() / "market-warehouse" / "data-lake"
@@ -58,7 +59,7 @@ def main() -> None:
 
     if not args.bronze_dir.exists():
         raise FileNotFoundError(f"bronze directory does not exist: {args.bronze_dir}")
-    if not any(args.bronze_dir.glob("symbol=*/data.parquet")):
+    if not any(args.bronze_dir.glob(f"symbol=*/{PARQUET_FILENAME}")):
         raise FileNotFoundError(f"no bronze parquet snapshots found under: {args.bronze_dir}")
 
     args.db_path.parent.mkdir(parents=True, exist_ok=True)

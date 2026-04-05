@@ -182,7 +182,7 @@ class TestWriteBronzeParquet:
         )
         bronze_dir = tmp_path / "data-lake" / "bronze" / "asset_class=volatility" / "symbol=VXHYG"
         bronze_dir.mkdir(parents=True)
-        pq.write_table(old_table, bronze_dir / "data.parquet")
+        pq.write_table(old_table, bronze_dir / "1d.parquet")
 
         # Now merge new data using the correct schema
         new_bars = [
@@ -228,7 +228,7 @@ class TestWriteBronzeParquet:
         )
         bronze_dir = tmp_path / "data-lake" / "bronze" / "asset_class=volatility" / "symbol=VXHYG"
         bronze_dir.mkdir(parents=True)
-        pq.write_table(old_table, bronze_dir / "data.parquet")
+        pq.write_table(old_table, bronze_dir / "1d.parquet")
 
         # Merge with same date (no new rows) — should still rewrite to fix schema
         same_bars = [
@@ -279,7 +279,7 @@ class TestMain:
         ):
             main()
 
-        parquet = tmp_path / "data-lake" / "bronze" / "asset_class=volatility" / "symbol=VIX" / "data.parquet"
+        parquet = tmp_path / "data-lake" / "bronze" / "asset_class=volatility" / "symbol=VIX" / "1d.parquet"
         assert parquet.exists()
 
     def test_main_with_preset_flag(self, tmp_path):
@@ -293,7 +293,7 @@ class TestMain:
         ):
             main()
 
-        parquet = tmp_path / "data-lake" / "bronze" / "asset_class=volatility" / "symbol=RVX" / "data.parquet"
+        parquet = tmp_path / "data-lake" / "bronze" / "asset_class=volatility" / "symbol=RVX" / "1d.parquet"
         assert parquet.exists()
 
     def test_main_default_preset(self, tmp_path):
@@ -306,7 +306,7 @@ class TestMain:
             (tmp_path / "vol.json").write_text('{"tickers": ["VVIX"]}')
             main()
 
-        parquet = tmp_path / "data-lake" / "bronze" / "asset_class=volatility" / "symbol=VVIX" / "data.parquet"
+        parquet = tmp_path / "data-lake" / "bronze" / "asset_class=volatility" / "symbol=VVIX" / "1d.parquet"
         assert parquet.exists()
 
     def test_main_fallback_symbols(self, tmp_path):
@@ -318,8 +318,8 @@ class TestMain:
         ):
             main()
 
-        assert (tmp_path / "data-lake" / "bronze" / "asset_class=volatility" / "symbol=VIX" / "data.parquet").exists()
-        assert (tmp_path / "data-lake" / "bronze" / "asset_class=volatility" / "symbol=VVIX" / "data.parquet").exists()
+        assert (tmp_path / "data-lake" / "bronze" / "asset_class=volatility" / "symbol=VIX" / "1d.parquet").exists()
+        assert (tmp_path / "data-lake" / "bronze" / "asset_class=volatility" / "symbol=VVIX" / "1d.parquet").exists()
 
     def test_main_handles_empty_data(self, tmp_path):
         """Symbols with no data are skipped gracefully."""
@@ -333,7 +333,7 @@ class TestMain:
         ):
             main()
 
-        parquet = tmp_path / "data-lake" / "bronze" / "asset_class=volatility" / "symbol=MISSING" / "data.parquet"
+        parquet = tmp_path / "data-lake" / "bronze" / "asset_class=volatility" / "symbol=MISSING" / "1d.parquet"
         assert not parquet.exists()
 
     def test_main_handles_fetch_error(self, tmp_path):

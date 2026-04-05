@@ -36,7 +36,7 @@ class TestUpload:
         bronze_dir = tmp_path / "bronze"
         equity_dir = bronze_dir / "asset_class=equity" / "symbol=AAPL"
         equity_dir.mkdir(parents=True)
-        (equity_dir / "data.parquet").write_bytes(b"fake parquet")
+        (equity_dir / "1d.parquet").write_bytes(b"fake parquet")
 
         mock_client = MagicMock()
         with patch("scripts.sync_to_r2._get_s3_client", return_value=mock_client):
@@ -46,16 +46,16 @@ class TestUpload:
         assert count == 1
         mock_client.upload_file.assert_called_once()
         args = mock_client.upload_file.call_args
-        assert "data.parquet" in args[0][0]
+        assert "1d.parquet" in args[0][0]
         assert args[0][1] == "test-bucket"
-        assert "asset_class=equity/symbol=AAPL/data.parquet" in args[0][2]
+        assert "asset_class=equity/symbol=AAPL/1d.parquet" in args[0][2]
 
     def test_uploads_multiple_files(self, tmp_path):
         bronze_dir = tmp_path / "bronze"
         for sym in ["AAPL", "NVDA"]:
             d = bronze_dir / "asset_class=equity" / f"symbol={sym}"
             d.mkdir(parents=True)
-            (d / "data.parquet").write_bytes(b"fake")
+            (d / "1d.parquet").write_bytes(b"fake")
 
         mock_client = MagicMock()
         with patch("scripts.sync_to_r2._get_s3_client", return_value=mock_client):
@@ -69,7 +69,7 @@ class TestUpload:
         bronze_dir = tmp_path / "bronze"
         d = bronze_dir / "asset_class=equity" / "symbol=AAPL"
         d.mkdir(parents=True)
-        (d / "data.parquet").write_bytes(b"fake")
+        (d / "1d.parquet").write_bytes(b"fake")
 
         mock_client = MagicMock()
         with patch("scripts.sync_to_r2._get_s3_client", return_value=mock_client):
@@ -90,7 +90,7 @@ class TestDownload:
 
         mock_client = MagicMock()
         mock_client.get_paginator.return_value.paginate.return_value = [
-            {"Contents": [{"Key": "bronze/asset_class=equity/symbol=AAPL/data.parquet"}]}
+            {"Contents": [{"Key": "bronze/asset_class=equity/symbol=AAPL/1d.parquet"}]}
         ]
 
         with patch("scripts.sync_to_r2._get_s3_client", return_value=mock_client):
@@ -106,7 +106,7 @@ class TestDownload:
         mock_client = MagicMock()
         mock_client.get_paginator.return_value.paginate.return_value = [
             {"Contents": [
-                {"Key": "bronze/asset_class=equity/symbol=AAPL/data.parquet"},
+                {"Key": "bronze/asset_class=equity/symbol=AAPL/1d.parquet"},
                 {"Key": "bronze/asset_class=equity/symbol=AAPL/metadata.json"},
             ]}
         ]
@@ -122,7 +122,7 @@ class TestDownload:
 
         mock_client = MagicMock()
         mock_client.get_paginator.return_value.paginate.return_value = [
-            {"Contents": [{"Key": "bronze/asset_class=equity/symbol=AAPL/data.parquet"}]}
+            {"Contents": [{"Key": "bronze/asset_class=equity/symbol=AAPL/1d.parquet"}]}
         ]
 
         with patch("scripts.sync_to_r2._get_s3_client", return_value=mock_client):

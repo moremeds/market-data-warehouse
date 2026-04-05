@@ -15,6 +15,12 @@ import os
 import sys
 from pathlib import Path
 
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:  # pragma: no cover
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from clients.bronze_client import PARQUET_FILENAME
+
 logger = logging.getLogger("mdw.sync_to_r2")
 
 
@@ -52,7 +58,7 @@ def upload(bronze_dir: Path, prefix: str = "bronze", dry_run: bool = False) -> i
     bucket = _get_bucket()
     uploaded = 0
 
-    for parquet_file in bronze_dir.rglob("data.parquet"):
+    for parquet_file in bronze_dir.rglob(PARQUET_FILENAME):
         rel_path = parquet_file.relative_to(bronze_dir.parent)
         s3_key = str(rel_path).replace("\\", "/")  # Windows compat
 
@@ -81,7 +87,7 @@ def download(bronze_dir: Path, prefix: str = "bronze", dry_run: bool = False) ->
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix + "/"):
         for obj in page.get("Contents", []):
             s3_key = obj["Key"]
-            if not s3_key.endswith("data.parquet"):
+            if not s3_key.endswith(PARQUET_FILENAME):
                 continue
 
             local_path = bronze_dir.parent / s3_key.replace("/", os.sep)
