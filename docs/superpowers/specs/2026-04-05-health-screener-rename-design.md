@@ -8,7 +8,7 @@
 The market data warehouse has ~2,500 equity tickers plus futures and volatility indices stored as per-ticker bronze parquet files. Three gaps need addressing:
 
 1. **No interior gap detection** — `daily_update.py` only detects tail gaps (latest date vs today). Missing trading days in the middle of a series go unnoticed.
-2. **Manual universe management** — The ticker universe is hand-curated via 157 preset JSON files. No dynamic screening based on fundamentals.
+2. **Manual universe management** — The ticker universe is hand-curated via 157 preset JSON files. No dynamic screening based on market cap, volume, and turnover.
 3. **Single-timeframe file naming** — Parquet files are named `data.parquet`, which blocks future multi-timeframe support (e.g., `5m.parquet`, `1h.parquet`).
 
 ## Implementation Order
@@ -46,9 +46,14 @@ Replace all hardcoded `"data.parquet"` references across the codebase with this 
 - `tests/test_fetch_cboe_volatility.py`
 - `tests/test_db_client.py`
 - `tests/test_fetch_ib_historical.py`
+- `tests/test_storage_client_compat.py`
+- `tests/test_rebuild_duckdb_from_parquet.py`
 
 **Docs:**
-- `CLAUDE.md`, `README.md`
+- `CLAUDE.md`, `README.md`, `docs/observability_defensive_blueprint.md`
+
+**Scripts (additional):**
+- `scripts/fetch_ib_historical.py` — any `data.parquet` references
 
 ### New File: `scripts/migrate_parquet_filename.py`
 
@@ -61,11 +66,20 @@ Idempotent migration script:
 
 ### Rollout
 
-1. Merge code changes
+**Order matters: migrate files first, then deploy code.** Deploying code first would make the system blind to all existing `data.parquet` files until migration completes.
+
+1. Stop any running writers (daily update, backfill) to avoid concurrent write conflicts
 2. Run migration with `--dry-run` to preview
 3. Run migration to rename files on disk
 4. Verify: `find ~/market-warehouse/data-lake -name "data.parquet"` (expect empty)
-5. Run `rebuild_duckdb_from_parquet.py` to confirm DuckDB rebuild works
+5. Deploy code changes (now code looks for `1d.parquet` which already exists)
+6. Run all tests to confirm
+7. Run `rebuild_duckdb_from_parquet.py` to confirm DuckDB rebuild works
+8. Restart writers
+
+### Conflict Handling
+
+The migration script must be run with **no concurrent writers**. If both `data.parquet` and `1d.parquet` exist in the same symbol directory, the migration aborts with an error (not silent skip) — this indicates a split-brain state that requires manual investigation.
 
 ### Risk
 
@@ -80,9 +94,11 @@ R2 sync (if active) still has old `data.parquet` keys. A full re-upload is neede
 ### CLI
 
 ```bash
-python scripts/health_check.py              # Normal run: detect + backfill + alert
-python scripts/health_check.py --dry-run    # Report gaps without fixing
-python scripts/health_check.py --force      # Run on non-trading day or re-run same day
+python scripts/health_check.py                          # Normal run: detect + backfill + alert (equity default)
+python scripts/health_check.py --dry-run                # Report gaps without fixing
+python scripts/health_check.py --force                  # Run on non-trading day or re-run same day
+python scripts/health_check.py --asset-class futures    # Health check for futures
+python scripts/health_check.py --asset-class volatility # Health check for volatility indices
 ```
 
 Config via env vars (same pattern as rest of system):
@@ -105,13 +121,17 @@ Generate expected trading dates between `min(actual)` and `max(actual)` using NY
 **`group_contiguous_dates(dates) -> list[tuple[date, date]]`**
 Group sorted missing dates into `(start, end)` ranges to minimize IB API calls. A 5-day gap becomes one fetch.
 
+**`compute_range_duration(start_date, end_date) -> str`**
+New helper for interior range fetches. Unlike `compute_ib_duration()` (which is tail-only: latest → target), this computes IB duration strings for arbitrary `(start, end)` ranges. Returns the appropriate IB duration string (e.g., `"5 D"`, `"1 M"`).
+
 **`backfill_gaps(symbol, gap_ranges, bronze, ib_client, fallback_client, asset_class)`**
 For each contiguous range:
-1. Compute IB duration from range
-2. Fetch via IB
+1. Compute IB duration from range via `compute_range_duration()`
+2. Fetch via IB with explicit `endDateTime` set to range end (not "now")
 3. Validate via `validate_bars`
 4. For equities: attempt fallback for remaining misses via `DailyBarFallbackClient`
-5. Merge into bronze via `bronze.merge_ticker_rows()`
+5. For volatility: attempt repair via CBOE public API (not IB — CBOE is the authoritative source)
+6. Merge into bronze via `bronze.merge_ticker_rows()`
 
 **`main()`**
 1. Discover all tickers and their trade dates (bulk query)
@@ -121,22 +141,28 @@ For each contiguous range:
 5. Log all repairs to `~/market-warehouse/logs/health_check_YYYY-MM-DD.log`
 6. If repairs exceed threshold: send email alert via existing Nodemailer system
 
-### Reused Code (no modifications needed)
+### Reused Code
 
-| Module | Functions |
-|--------|-----------|
-| `clients.bronze_client` | `BronzeClient` |
-| `clients.ib_client` | `IBClient` |
-| `clients.daily_bar_fallback` | `DailyBarFallbackClient` |
-| `scripts.daily_update` | `is_trading_day`, `validate_bars`, `bars_to_rows`, `bars_to_futures_rows`, `compute_ib_duration`, `load_preset`, `trading_days_between` |
+| Module | Functions | Modifications |
+|--------|-----------|---------------|
+| `clients.bronze_client` | `BronzeClient` | None |
+| `clients.ib_client` | `IBClient` | None |
+| `clients.daily_bar_fallback` | `DailyBarFallbackClient` | None |
+| `scripts.daily_update` | `is_trading_day`, `validate_bars`, `bars_to_rows`, `bars_to_futures_rows`, `load_preset`, `trading_days_between` | None |
+| `scripts.fetch_cboe_volatility` | CBOE fetch logic | May need to extract a reusable function for single-symbol date-range fetch |
+
+### New Code Required
+
+- `compute_range_duration(start, end)` — IB duration for arbitrary date ranges (the existing `compute_ib_duration` is tail-only)
+- Range-based IB fetch wrapper — existing `fetch_ticker_update` has no `end_date` parameter; need a variant that sets `endDateTime` for interior ranges
 
 ### Calendar Behavior
 
-| Asset Class | Calendar | Gap Detection |
-|-------------|----------|---------------|
-| equity | NYSE | Strict — every NYSE trading day expected |
-| volatility | NYSE | Strict — CBOE follows NYSE |
-| futures | Relaxed | Skip NYSE-holiday gaps (CME trades some holidays) |
+| Asset Class | Calendar | Gap Detection | Repair Source |
+|-------------|----------|---------------|---------------|
+| equity | NYSE | Strict — every NYSE trading day expected | IB → Nasdaq/Stooq fallback |
+| volatility | NYSE | Strict — CBOE follows NYSE | CBOE public API (authoritative source, not IB) |
+| futures | Relaxed | Only detect gaps on days where adjacent data exists (no NYSE calendar assumption) | IB only (no fallback) |
 
 ---
 
@@ -161,15 +187,15 @@ Config via env vars / hardcoded defaults:
 
 ### IB Scanner Strategy
 
-IB's `reqScannerData` returns max 50 results per request. To reach ~1000 tickers, run multiple scans across market cap bands and scan types:
+IB's `reqScannerData` returns max 50 results per request. To reach ~1000 tickers, run multiple scans across market cap bands. The primary selection criterion is **market cap** (a fundamental), with volume and turnover as secondary filters to ensure liquid, tradeable names.
 
 | Scan Code | Market Cap Band | Purpose |
 |-----------|----------------|---------|
-| `MOST_ACTIVE` | >$10B | Large cap high-volume |
-| `MOST_ACTIVE` | $2B–$10B | Mid cap high-volume |
-| `MOST_ACTIVE` | $500M–$2B | Small cap high-volume |
-| `HOT_BY_VOLUME` | >$10B, $2B–$10B, $500M–$2B | Volume leaders |
-| `TOP_TRADE_COUNT` | >$10B, $2B–$10B, $500M–$2B | High turnover |
+| `TOP_MARKET_CAP` | >$10B | Large cap universe core |
+| `TOP_MARKET_CAP` | $2B–$10B | Mid cap universe |
+| `TOP_MARKET_CAP` | $500M–$2B | Small cap (liquid subset) |
+| `MOST_ACTIVE` | >$500M | Volume-weighted supplement |
+| `TOP_TRADE_COUNT` | >$500M | High turnover supplement |
 
 Each scan uses:
 ```python
@@ -213,7 +239,8 @@ Tickers present in the latest scan have their absence count reset to 0 (removed 
 
 ### Safeguards
 
-- **Max removals cap:** If removals exceed `--max-removals` (default 50), abort removals and alert. Prevents catastrophic archiving on first run or scanner API failure.
+- **Bootstrap mode:** On first run (no `screener_state.json` exists), the screener writes the scanned universe as the initial preset and state file, but does **not** archive any existing bronze tickers. This avoids the deadlock where current universe (~2,500) exceeds target (~1,000) and the max-removals cap (50) blocks convergence. After bootstrap, the grace period begins naturally — tickers not in scans will accumulate absence counts over subsequent daily runs.
+- **Max removals cap:** If removals exceed max (default 50) on a non-bootstrap run, abort removals and alert. Prevents catastrophic archiving from scanner API failures.
 - **Grace period:** 3 consecutive absences required before removal.
 - **Dry-run:** Scans and compares but takes no action.
 - **Idempotent:** Running twice on the same day with `--force` produces the same result.
