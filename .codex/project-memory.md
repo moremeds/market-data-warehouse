@@ -15,8 +15,8 @@ Use this file for:
 ## Durable Facts
 
 - Canonical storage is bronze Parquet, not DuckDB.
-- Live equity data is stored per ticker at `~/market-warehouse/data-lake/bronze/asset_class=equity/symbol=<ticker>/data.parquet`.
-- Delisted symbols that should no longer participate in future syncs or backfills are archived outside the canonical sync path under `~/market-warehouse/data-lake/bronze-delisted/asset_class=equity/symbol=<ticker>/data.parquet`.
+- Live equity data is stored per ticker at `~/market-warehouse/data-lake/bronze/asset_class=equity/symbol=<ticker>/1d.parquet`.
+- Delisted symbols that should no longer participate in future syncs or backfills are archived outside the canonical sync path under `~/market-warehouse/data-lake/bronze-delisted/asset_class=equity/symbol=<ticker>/1d.parquet`.
 - DuckDB is rebuilt from bronze parquet when a local analytical DB file is needed.
 - `scripts/daily_update.py` is parquet-first and does not hold the live DuckDB write path.
 - `scripts/daily_update.py` supports `--target-date YYYY-MM-DD` for fixed-date catch-up runs and only publishes bars with `latest < trade_date <= target`.

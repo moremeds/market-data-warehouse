@@ -70,9 +70,9 @@ Raw → Bronze → Silver → Gold
 ├── data-lake/
 │   ├── raw/
 │   ├── bronze/
-│   │   ├── asset_class=equity/symbol=AAPL/data.parquet
-│   │   ├── asset_class=volatility/symbol=VIX/data.parquet
-│   │   └── asset_class=futures/symbol=ES_202506/data.parquet
+│   │   ├── asset_class=equity/symbol=AAPL/1d.parquet
+│   │   ├── asset_class=volatility/symbol=VIX/1d.parquet
+│   │   └── asset_class=futures/symbol=ES_202506/1d.parquet
 │   ├── silver/
 │   └── gold/
 ├── duckdb/

@@ -5,7 +5,7 @@ Parallelises requests using ib_async's async API with a semaphore to respect
 IB's pacing limit (~6 concurrent historical-data requests).
 
 Publishes:
-  - data-lake/bronze/asset_class=equity/symbol=<ticker>/data.parquet
+  - data-lake/bronze/asset_class=equity/symbol=<ticker>/1d.parquet
 
 Requires IB Gateway or TWS running on localhost.
 

@@ -19,7 +19,7 @@ The main change is architectural: bronze becomes a first-class publish target, n
 - `scripts/fetch_ib_historical.py` now falls back to `IB_EARLIEST_DATE` when IB returns no head timestamp. That keeps more symbols fetchable, but it also makes request volume and empty-window behavior more important to observe.
 - Cursor state only records completed tickers. It does not track run ownership, window-level progress, lease expiry, or per-mode conflicts, so overlapping backfills are possible.
 - Preset loading is duplicated in ingestion scripts. Universe metadata exists in JSON already, but is not treated as a domain model.
-- Bronze publication now rewrites one canonical snapshot per ticker under `symbol=<ticker>/data.parquet` and uses a file-level atomic publish. That removed DuckDB lock contention, but it still rewrites full ticker history on each update and does not yet use staged manifests or lease-backed orchestration.
+- Bronze publication now rewrites one canonical snapshot per ticker under `symbol=<ticker>/1d.parquet` and uses a file-level atomic publish. That removed DuckDB lock contention, but it still rewrites full ticker history on each update and does not yet use staged manifests or lease-backed orchestration.
 - The active sync universe is whatever remains under the canonical bronze tree, so delisted symbols need an explicit archive path outside that tree or they will continue to participate in parquet-discovered syncs and backfills.
 - `clients/ib_client.py` now retries successive `clientId` values on IB error `326`, but that path is not yet instrumented with retry counts, actual connected ID, or launchd-friendly diagnostics.
 

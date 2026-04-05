@@ -56,8 +56,8 @@ market-data-warehouse/              # Git repo
 ~/market-warehouse/                 # Data warehouse (created by setup script)
 ├── .venv/                          # Python 3.13 venv
 ├── data-lake/
-│   ├── bronze/asset_class=equity/  # Per-ticker Hive-partitioned Parquet (symbol=AAPL/data.parquet)
-│   ├── bronze/asset_class=futures/ # Per-contract Hive-partitioned Parquet (symbol=ES_202506/data.parquet)
+│   ├── bronze/asset_class=equity/  # Per-ticker Hive-partitioned Parquet (symbol=AAPL/1d.parquet)
+│   ├── bronze/asset_class=futures/ # Per-contract Hive-partitioned Parquet (symbol=ES_202506/1d.parquet)
 │   ├── bronze-delisted/asset_class=equity/  # Archived delisted symbols excluded from future sync/backfill runs
 │   ├── silver/                     # Cleaned / adjusted
 │   └── gold/                       # Derived analytics / factor tables
@@ -226,7 +226,7 @@ Current fetch behavior:
 bash scripts/run_backfill_all.sh   # Runs all presets with stall detection + auto-restart
 ```
 
-Output: per-ticker bronze Parquet at `data-lake/bronze/asset_class=equity/symbol=<ticker>/data.parquet` (or `asset_class=futures/symbol=ES_202506/data.parquet` for futures). DuckDB is rebuilt separately when needed.
+Output: per-ticker bronze Parquet at `data-lake/bronze/asset_class=equity/symbol=<ticker>/1d.parquet` (or `asset_class=futures/symbol=ES_202506/1d.parquet` for futures). DuckDB is rebuilt separately when needed.
 
 ### Futures preset format
 
@@ -243,7 +243,7 @@ Futures presets use a `contracts` array instead of `tickers`:
 ```
 `load_preset()` flattens these into composite tickers (`ES_202506`) and returns an exchange map for contract construction.
 
-Delisted symbols that should no longer participate in future syncs or backfills should be archived outside the canonical sync path under `data-lake/bronze-delisted/asset_class=equity/symbol=<ticker>/data.parquet`.
+Delisted symbols that should no longer participate in future syncs or backfills should be archived outside the canonical sync path under `data-lake/bronze-delisted/asset_class=equity/symbol=<ticker>/1d.parquet`.
 
 ### Daily updates
 
@@ -352,7 +352,7 @@ Catches: AWS keys, API key/secret/password assignments, private key headers, Git
 - `symbol_id` is now a stable 53-bit hash from `blake2b(symbol)` for new symbols
 - Live ingestion writes bronze parquet directly; DuckDB is rebuilt from bronze when needed
 - Empty IB head timestamps now fall back to the earliest supported IB historical date instead of skipping the symbol
-- Bronze Parquet uses per-ticker Hive-partitioned layout: `data-lake/bronze/asset_class=equity/symbol=AAPL/data.parquet` (futures: `asset_class=futures/symbol=ES_202506/data.parquet`)
+- Bronze Parquet uses per-ticker Hive-partitioned layout: `data-lake/bronze/asset_class=equity/symbol=AAPL/1d.parquet` (futures: `asset_class=futures/symbol=ES_202506/1d.parquet`)
 - Bronze publication is atomic at the file level: write temp parquet, validate it, then `os.replace()` into place
 - `BronzeClient` accepts `asset_class` constructor param (`"equity"`, `"volatility"`, or `"futures"`) to select the appropriate parquet schema. Default `"equity"` preserves all existing behavior.
 - `IBClient.connect()` auto-retries successive `clientId` values after IB error `326`, then records the actual connected ID

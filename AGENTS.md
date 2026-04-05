@@ -18,8 +18,8 @@ At the start of every new Codex session in this repo:
 This repo is a local-first market data warehouse optimized for single-machine operation.
 
 Current live shape:
-- Canonical storage is per-ticker bronze Parquet under `~/market-warehouse/data-lake/bronze/asset_class=equity/symbol=<ticker>/data.parquet`
-- Delisted symbols that should no longer participate in future syncs or backfills are archived under `~/market-warehouse/data-lake/bronze-delisted/asset_class=equity/symbol=<ticker>/data.parquet`
+- Canonical storage is per-ticker bronze Parquet under `~/market-warehouse/data-lake/bronze/asset_class=equity/symbol=<ticker>/1d.parquet`
+- Delisted symbols that should no longer participate in future syncs or backfills are archived under `~/market-warehouse/data-lake/bronze-delisted/asset_class=equity/symbol=<ticker>/1d.parquet`
 - DuckDB is a local analytical and rebuild target, not the live write path
 - Interactive Brokers is the primary source for ingestion
 - Daily syncs can recover unresolved target-day gaps for the current U.S. equity universe with a narrow external fallback chain
