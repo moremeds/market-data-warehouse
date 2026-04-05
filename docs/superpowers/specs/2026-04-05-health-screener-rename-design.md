@@ -191,10 +191,10 @@ IB's `reqScannerData` returns max 50 results per request. To reach ~1000 tickers
 
 | Scan Code | Market Cap Band | Purpose |
 |-----------|----------------|---------|
-| `TOP_MARKET_CAP` | >$10B | Large cap universe core |
-| `TOP_MARKET_CAP` | $2B–$10B | Mid cap universe |
-| `TOP_MARKET_CAP` | $500M–$2B | Small cap (liquid subset) |
-| `MOST_ACTIVE` | >$500M | Volume-weighted supplement |
+| `MOST_ACTIVE_USD` | >$10B | Large cap by $ volume |
+| `MOST_ACTIVE_USD` | $2B–$10B | Mid cap by $ volume |
+| `MOST_ACTIVE_USD` | $500M–$2B | Small cap by $ volume |
+| `MOST_ACTIVE` | >$500M | Share volume supplement |
 | `TOP_TRADE_COUNT` | >$500M | High turnover supplement |
 
 Each scan uses:

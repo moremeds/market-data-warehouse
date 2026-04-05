@@ -166,11 +166,14 @@ async def run_scanner_sweeps(ib) -> set[str]:
     from ib_async import ScannerSubscription  # lazy import
 
     sweeps = [
-        ("TOP_MARKET_CAP", 1e10, None, 100000),   # Large cap
-        ("TOP_MARKET_CAP", 2e9, 1e10, 100000),    # Mid cap
-        ("TOP_MARKET_CAP", 5e8, 2e9, 100000),     # Small cap
-        ("MOST_ACTIVE", 5e8, None, 100000),        # Volume supplement
-        ("TOP_TRADE_COUNT", 5e8, None, 100000),    # Turnover supplement
+        # MOST_ACTIVE_USD ($ volume) — naturally biased toward large caps
+        ("MOST_ACTIVE_USD", 1e10, None, 0),       # Large cap by $ volume
+        ("MOST_ACTIVE_USD", 2e9, 1e10, 0),        # Mid cap by $ volume
+        ("MOST_ACTIVE_USD", 5e8, 2e9, 0),         # Small cap by $ volume
+        # MOST_ACTIVE (share volume) — catches high-volume names
+        ("MOST_ACTIVE", 5e8, None, 0),             # Volume supplement
+        # TOP_TRADE_COUNT — high turnover / trade frequency
+        ("TOP_TRADE_COUNT", 5e8, None, 0),         # Turnover supplement
     ]
 
     symbols: set[str] = set()
