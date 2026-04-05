@@ -56,7 +56,7 @@ class TestBronzeClient:
                 "volume": 1000,
             }
         ]
-        assert list(bronze.bronze_dir.glob("symbol=AAPL/.data.parquet.*.tmp")) == []
+        assert list(bronze.bronze_dir.glob("symbol=AAPL/.1d.parquet.*.tmp")) == []
 
     @pytest.mark.integration
     def test_replace_ticker_rows_sorts_and_deduplicates(self, bronze):
@@ -116,7 +116,7 @@ class TestBronzeClient:
 
     @pytest.mark.integration
     def test_get_symbol_id_empty_snapshot_falls_back(self, bronze, tmp_bronze, monkeypatch):
-        path = tmp_bronze / "symbol=AAPL" / "data.parquet"
+        path = tmp_bronze / "symbol=AAPL" / "1d.parquet"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"placeholder")
 
@@ -157,7 +157,7 @@ class TestBronzeClient:
                 [_row("2025-01-02", bronze.get_symbol_id("AAPL"), 102.0)],
             )
 
-        assert list(bronze.bronze_dir.glob("symbol=AAPL/.data.parquet.*.tmp")) == []
+        assert list(bronze.bronze_dir.glob("symbol=AAPL/.1d.parquet.*.tmp")) == []
 
     @pytest.mark.integration
     def test_validate_parquet_file_errors(self, bronze, tmp_path):

@@ -17,6 +17,8 @@ from clients.symbol_ids import stable_symbol_id
 
 log = logging.getLogger(__name__)
 
+PARQUET_FILENAME = "1d.parquet"
+
 _DEFAULT_BRONZE_DIR = (
     Path.home() / "market-warehouse" / "data-lake" / "bronze" / "asset_class=equity"
 )
@@ -112,7 +114,7 @@ class BronzeClient:
             return set()
 
         symbols: set[str] = set()
-        for path in self._bronze_dir.glob("symbol=*/data.parquet"):
+        for path in self._bronze_dir.glob(f"symbol=*/{PARQUET_FILENAME}"):
             partition = path.parent.name
             if partition.startswith("symbol="):
                 symbols.add(partition.split("=", 1)[1])
@@ -227,10 +229,10 @@ class BronzeClient:
         return [dict(zip(columns, row)) for row in result.fetchall()]
 
     def _symbol_path(self, symbol: str) -> Path:
-        return self._bronze_dir / f"symbol={symbol}" / "data.parquet"
+        return self._bronze_dir / f"symbol={symbol}" / PARQUET_FILENAME
 
     def _escaped_glob(self) -> str:
-        return str(self._bronze_dir / "symbol=*/data.parquet").replace("'", "''")
+        return str(self._bronze_dir / f"symbol=*/{PARQUET_FILENAME}").replace("'", "''")
 
     def _normalize_rows(self, rows: list[dict[str, Any]], symbol: str) -> list[dict[str, Any]]:
         if self._asset_class == "futures":
@@ -281,7 +283,7 @@ class BronzeClient:
     def _publish_symbol_rows(self, symbol: str, rows: list[dict[str, Any]]) -> Path:
         out_path = self._symbol_path(symbol)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = out_path.with_name(f".data.parquet.{os.getpid()}.{time.time_ns()}.tmp")
+        tmp_path = out_path.with_name(f".{PARQUET_FILENAME}.{os.getpid()}.{time.time_ns()}.tmp")
         table = self._table_from_rows(rows)
 
         try:
