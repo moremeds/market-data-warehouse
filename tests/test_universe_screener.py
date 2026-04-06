@@ -17,6 +17,7 @@ from scripts.universe_screener import (
     _send_screener_alert,
     compare_universes,
     get_removals_after_grace,
+    load_core_etfs,
     load_screener_state,
     log_changes,
     run_scanner_sweeps,
@@ -660,3 +661,133 @@ class TestMain:
             main(["--force"])
 
         mock_alert.assert_called_once()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# load_core_etfs
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestLoadCoreEtfs:
+    def test_load_core_etfs_returns_set(self, tmp_path, monkeypatch):
+        path = tmp_path / "core-etfs.json"
+        path.write_text(json.dumps({"name": "core-etfs", "tickers": ["SPY", "QQQ", "GLD"]}))
+        monkeypatch.setattr("scripts.universe_screener._CORE_ETFS_PATH", path)
+        result = load_core_etfs()
+        assert result == {"SPY", "QQQ", "GLD"}
+
+    def test_load_core_etfs_missing_returns_empty(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("scripts.universe_screener._CORE_ETFS_PATH", tmp_path / "nonexistent.json")
+        assert load_core_etfs() == set()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Core ETF integration tests
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestCoreEtfIntegration:
+    @pytest.fixture(autouse=True)
+    def _no_scanner_throttle(self, monkeypatch):
+        monkeypatch.setattr("scripts.universe_screener._SCANNER_THROTTLE_SECONDS", 0)
+
+    def test_core_etf_added_when_missing(self, tmp_path, monkeypatch):
+        """A core ETF not in bronze should be added even if not scanned."""
+        monkeypatch.setattr("scripts.universe_screener._DATA_LAKE", tmp_path / "data-lake")
+        monkeypatch.setattr("scripts.universe_screener._STATE_PATH", tmp_path / "state.json")
+        monkeypatch.setattr("scripts.universe_screener._LOG_DIR", tmp_path / "logs")
+        monkeypatch.setattr("scripts.universe_screener._PRESET_PATH", tmp_path / "preset.json")
+        monkeypatch.setattr("scripts.universe_screener._CORE_ETFS_PATH", tmp_path / "core.json")
+
+        # Write a core ETF preset
+        (tmp_path / "core.json").write_text(json.dumps({"name": "core-etfs", "tickers": ["SPY", "QQQ"]}))
+        # Empty bronze
+        (tmp_path / "data-lake" / "bronze" / "asset_class=equity").mkdir(parents=True)
+        # Scanner returns nothing
+        mock_ib_client = _make_mock_ib_client([])
+
+        with patch("scripts.universe_screener.IBClient", return_value=mock_ib_client):
+            with patch("subprocess.run") as mock_subproc:
+                with patch("sys.argv", ["universe_screener.py", "--force"]):
+                    main()
+
+        # Backfill must have been triggered for SPY and QQQ
+        assert mock_subproc.called
+        cmd = mock_subproc.call_args[0][0]
+        assert "SPY" in cmd
+        assert "QQQ" in cmd
+
+    def test_core_etf_never_in_removals(self, tmp_path, monkeypatch):
+        """A core ETF in bronze but not scanned should NEVER be archived."""
+        monkeypatch.setattr("scripts.universe_screener._DATA_LAKE", tmp_path / "data-lake")
+        monkeypatch.setattr("scripts.universe_screener._STATE_PATH", tmp_path / "state.json")
+        monkeypatch.setattr("scripts.universe_screener._LOG_DIR", tmp_path / "logs")
+        monkeypatch.setattr("scripts.universe_screener._PRESET_PATH", tmp_path / "preset.json")
+        monkeypatch.setattr("scripts.universe_screener._CORE_ETFS_PATH", tmp_path / "core.json")
+
+        (tmp_path / "core.json").write_text(json.dumps({"name": "core-etfs", "tickers": ["SPY"]}))
+
+        # Pre-existing state from a previous run, not bootstrap
+        (tmp_path / "state.json").write_text(json.dumps({
+            "run_date": "2026-04-01",
+            "universe": ["SPY", "AAPL"],
+            "absent_counts": {},
+        }))
+
+        # Bronze contains SPY and AAPL
+        for sym in ("SPY", "AAPL"):
+            sym_dir = tmp_path / "data-lake" / "bronze" / "asset_class=equity" / f"symbol={sym}"
+            sym_dir.mkdir(parents=True)
+            (sym_dir / "1d.parquet").write_bytes(b"x")
+
+        # Scanner returns AAPL but not SPY
+        mock_ib_client = _make_mock_ib_client(["AAPL"])
+
+        with patch("scripts.universe_screener.IBClient", return_value=mock_ib_client):
+            with patch("subprocess.run"):
+                with patch("sys.argv", ["universe_screener.py", "--force"]):
+                    main()
+
+        # SPY must NOT be archived
+        spy_archive = tmp_path / "data-lake" / "bronze-delisted" / "asset_class=equity" / "symbol=SPY"
+        assert not spy_archive.exists()
+
+        # SPY must NOT appear in absent_counts in the new state
+        state = json.loads((tmp_path / "state.json").read_text())
+        assert "SPY" not in state["absent_counts"]
+
+    def test_existing_absent_count_for_core_etf_is_dropped(self, tmp_path, monkeypatch):
+        """Defensive: if a previous buggy run added a core ETF to absent_counts, drop it."""
+        monkeypatch.setattr("scripts.universe_screener._DATA_LAKE", tmp_path / "data-lake")
+        monkeypatch.setattr("scripts.universe_screener._STATE_PATH", tmp_path / "state.json")
+        monkeypatch.setattr("scripts.universe_screener._LOG_DIR", tmp_path / "logs")
+        monkeypatch.setattr("scripts.universe_screener._PRESET_PATH", tmp_path / "preset.json")
+        monkeypatch.setattr("scripts.universe_screener._CORE_ETFS_PATH", tmp_path / "core.json")
+
+        (tmp_path / "core.json").write_text(json.dumps({"name": "core-etfs", "tickers": ["SPY"]}))
+
+        # Buggy state: SPY has absent_count = 99 (way past grace, would be removed)
+        (tmp_path / "state.json").write_text(json.dumps({
+            "run_date": "2026-04-01",
+            "universe": ["SPY", "AAPL"],
+            "absent_counts": {"SPY": 99},
+        }))
+
+        for sym in ("SPY", "AAPL"):
+            sym_dir = tmp_path / "data-lake" / "bronze" / "asset_class=equity" / f"symbol={sym}"
+            sym_dir.mkdir(parents=True)
+            (sym_dir / "1d.parquet").write_bytes(b"x")
+
+        mock_ib_client = _make_mock_ib_client(["AAPL"])
+
+        with patch("scripts.universe_screener.IBClient", return_value=mock_ib_client):
+            with patch("subprocess.run"):
+                with patch("sys.argv", ["universe_screener.py", "--force"]):
+                    main()
+
+        # SPY must NOT be archived even though absent_count was 99
+        spy_archive = tmp_path / "data-lake" / "bronze-delisted" / "asset_class=equity" / "symbol=SPY"
+        assert not spy_archive.exists()
+
+        state = json.loads((tmp_path / "state.json").read_text())
+        assert "SPY" not in state["absent_counts"]

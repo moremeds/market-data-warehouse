@@ -55,6 +55,7 @@ _DATA_LAKE = _WAREHOUSE_DIR / "data-lake"
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _PRESET_PATH = PROJECT_ROOT / "presets" / "screened-universe.json"
+_CORE_ETFS_PATH = PROJECT_ROOT / "presets" / "core-etfs.json"
 _STATE_PATH = _WAREHOUSE_DIR / "logs" / "screener_state.json"
 _LOG_DIR = _WAREHOUSE_DIR / "logs"
 
@@ -75,6 +76,18 @@ def compare_universes(
     additions = scanned - current
     removals = current - scanned
     return additions, removals
+
+
+def load_core_etfs() -> set[str]:
+    """Load the core ETF ticker list from presets/core-etfs.json.
+
+    Returns empty set if the file doesn't exist (graceful degradation).
+    """
+    if not _CORE_ETFS_PATH.exists():
+        return set()
+    with _CORE_ETFS_PATH.open() as f:
+        data = json.load(f)
+    return set(data.get("tickers", []))
 
 
 def load_screener_state(path: Path) -> dict | None:
@@ -302,14 +315,27 @@ def main(argv: list[str] | None = None) -> None:
         scanned_universe = ib_client.ib.run(run_scanner_sweeps(ib_client.ib))
     log.info("Scanned universe: %d tickers", len(scanned_universe))
 
-    # ── Compare universes ──────────────────────────────────────────────
-    additions, candidate_removals = compare_universes(current_universe, scanned_universe)
+    # ── Compare universes (excluding core ETFs from removal logic) ─────
+    core_etfs = load_core_etfs()
+    log.info("Core ETFs (always included): %d tickers", len(core_etfs))
+
+    # Union scanner output with core ETFs BEFORE the comparison
+    full_scanned = scanned_universe | core_etfs
+
+    # Exclude core ETFs from the removal-eligible set on BOTH sides
+    current_excl_core = current_universe - core_etfs
+    scanned_excl_core = full_scanned - core_etfs
+
+    additions = full_scanned - current_universe  # may include core ETFs not yet in bronze
+    candidate_removals = current_excl_core - scanned_excl_core  # core ETFs CANNOT be here
 
     # ── Load prior absent counts from state ────────────────────────────
     prior_absent = state.get("absent_counts", {}) if state is not None else {}
+    # Defensive: if a previous (buggy) run added a core ETF here, drop it
+    prior_absent = {k: v for k, v in prior_absent.items() if k not in core_etfs}
 
     # ── Update absent counts ───────────────────────────────────────────
-    new_absent = update_absent_counts(prior_absent, candidate_removals, scanned_universe)
+    new_absent = update_absent_counts(prior_absent, candidate_removals, scanned_excl_core)
 
     # ── Bootstrap mode: first run (no state file) skips all removals ──
     bootstrap_mode = state is None
@@ -355,6 +381,8 @@ def main(argv: list[str] | None = None) -> None:
 
     # ── Compute new universe and write preset ──────────────────────────
     new_universe = (current_universe | additions) - confirmed_removals
+    # Belt-and-suspenders: ensure core ETFs are always present
+    new_universe = new_universe | core_etfs
     write_universe_preset(_PRESET_PATH, list(new_universe))
     log.info("Preset written: %s (%d tickers)", _PRESET_PATH, len(new_universe))
 
