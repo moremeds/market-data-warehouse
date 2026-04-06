@@ -18,9 +18,13 @@ from scripts.health_check import (
     _send_alert,
     compute_range_duration,
     find_interior_gaps,
+    find_intraday_gaps,
+    generate_expected_intraday_timestamps,
     get_all_trade_dates,
     group_contiguous_dates,
     main,
+    repair_intraday_window,
+    report_intraday_health,
 )
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -704,3 +708,323 @@ class TestMain:
                             with patch("scripts.daily_update.fetch_fallback_bars", return_value=([fallback_bar], ["fallback"])):
                                 with patch("clients.daily_bar_fallback.DailyBarFallbackClient"):
                                     main()  # Should complete without error
+
+
+# ── Intraday helpers ──────────────────────────────────────────────────────────
+
+from datetime import datetime, time, timezone  # noqa: E402
+from zoneinfo import ZoneInfo  # noqa: E402
+
+import pyarrow as pa  # noqa: E402,F811
+import pyarrow.parquet as pq  # noqa: E402,F811
+
+_INTRADAY_SCHEMA = pa.schema(
+    [
+        ("bar_timestamp", pa.timestamp("us", tz="UTC")),
+        ("symbol_id", pa.int64()),
+        ("open", pa.float64()),
+        ("high", pa.float64()),
+        ("low", pa.float64()),
+        ("close", pa.float64()),
+        ("volume", pa.int64()),
+    ]
+)
+_ET = ZoneInfo("America/New_York")
+
+
+def _et_to_utc(d: date, h: int, m: int) -> datetime:
+    return datetime(d.year, d.month, d.day, h, m, tzinfo=_ET).astimezone(timezone.utc)
+
+
+def _write_intraday_parquet(
+    bronze_dir: Path,
+    symbol: str,
+    timeframe: str,
+    timestamps: list[datetime],
+) -> None:
+    sym_dir = bronze_dir / f"symbol={symbol}"
+    sym_dir.mkdir(parents=True, exist_ok=True)
+    rows = [
+        {
+            "bar_timestamp": ts.astimezone(timezone.utc),
+            "symbol_id": 1,
+            "open": 1.0,
+            "high": 2.0,
+            "low": 0.5,
+            "close": 1.5,
+            "volume": 1000,
+        }
+        for ts in sorted(timestamps)
+    ]
+    table = pa.Table.from_pylist(rows, schema=_INTRADAY_SCHEMA)
+    fname = "1h.parquet" if timeframe == "1h" else "5m.parquet"
+    pq.write_table(table, sym_dir / fname, compression="snappy")
+
+
+# ── generate_expected_intraday_timestamps ─────────────────────────────────────
+
+
+class TestGenerateExpectedIntradayTimestamps:
+    def test_5m_full_day_count(self):
+        d = date(2026, 4, 6)  # Monday, no holiday
+        ts = generate_expected_intraday_timestamps([d], "5m")
+        # 9:30 → 15:55 inclusive = (16:00 - 9:30)/5 = 78 bars
+        assert len(ts) == 78
+
+    def test_1h_full_day_count(self):
+        d = date(2026, 4, 6)
+        ts = generate_expected_intraday_timestamps([d], "1h")
+        # 9:30, 10:30, 11:30, 12:30, 13:30, 14:30 → last bar 14:30 covers 14:30-15:30
+        # 15:30 would extend past 16:00, so it's excluded → 6 bars
+        assert len(ts) == 6
+
+    def test_5m_early_close(self):
+        # 2026-11-27 is Black Friday (early close at 13:00 ET)
+        d = date(2026, 11, 27)
+        ts = generate_expected_intraday_timestamps([d], "5m")
+        # 9:30 → 12:55 inclusive = (13:00 - 9:30)/5 = 42 bars
+        assert len(ts) == 42
+
+    def test_skips_holidays(self):
+        # 2026-12-25 is Christmas (NYSE closed)
+        d = date(2026, 12, 25)
+        ts = generate_expected_intraday_timestamps([d], "5m")
+        assert ts == set()
+
+    def test_invalid_timeframe_raises(self):
+        with pytest.raises(ValueError):
+            generate_expected_intraday_timestamps([date(2026, 4, 6)], "1d")
+
+    def test_empty_input(self):
+        assert generate_expected_intraday_timestamps([], "5m") == set()
+
+
+# ── find_intraday_gaps ────────────────────────────────────────────────────────
+
+
+class TestFindIntradayGaps:
+    def test_clean_series_no_gaps(self):
+        d = date(2026, 4, 6)
+        full = sorted(generate_expected_intraday_timestamps([d], "5m"))
+        missing, halts = find_intraday_gaps(full, "5m")
+        assert missing == []
+        assert halts == []
+
+    def test_too_few_bars_returns_empty(self):
+        ts = [_et_to_utc(date(2026, 4, 6), 9, 30)]
+        assert find_intraday_gaps(ts, "5m") == ([], [])
+
+    def test_interior_missing_detected(self):
+        d = date(2026, 4, 6)
+        full = sorted(generate_expected_intraday_timestamps([d], "5m"))
+        # Drop one bar in the middle
+        dropped = full.pop(20)
+        missing, halts = find_intraday_gaps(full, "5m")
+        assert dropped in missing
+        # Single 5m gap is < 30 min → flagged as halt
+        assert len(halts) == 1
+
+    def test_short_run_flagged_as_halt(self):
+        d = date(2026, 4, 6)
+        full = sorted(generate_expected_intraday_timestamps([d], "5m"))
+        # Drop 3 consecutive bars (15 min) → halt
+        keep = [t for i, t in enumerate(full) if i not in (30, 31, 32)]
+        missing, halts = find_intraday_gaps(keep, "5m")
+        assert len(missing) == 3
+        assert len(halts) == 1
+
+    def test_two_separate_runs_each_classified(self):
+        d = date(2026, 4, 6)
+        full = sorted(generate_expected_intraday_timestamps([d], "5m"))
+        # Drop two separate single-bar gaps with bars in between → exercises
+        # the non-contiguous-run branch in find_intraday_gaps
+        keep = [t for i, t in enumerate(full) if i not in (10, 40)]
+        missing, halts = find_intraday_gaps(keep, "5m")
+        assert len(missing) == 2
+        assert len(halts) == 2
+
+    def test_long_run_not_halt(self):
+        d = date(2026, 4, 6)
+        full = sorted(generate_expected_intraday_timestamps([d], "5m"))
+        # Drop 6 consecutive bars (30 min) → NOT a halt
+        keep = [t for i, t in enumerate(full) if not (30 <= i < 36)]
+        missing, halts = find_intraday_gaps(keep, "5m")
+        assert len(missing) == 6
+        assert halts == []
+
+
+# ── report_intraday_health ────────────────────────────────────────────────────
+
+
+class TestReportIntradayHealth:
+    def test_clean_symbol_no_gaps(self, tmp_path):
+        bronze_dir = tmp_path / "bronze"
+        d = date(2026, 4, 6)
+        full = sorted(generate_expected_intraday_timestamps([d], "5m"))
+        _write_intraday_parquet(bronze_dir, "AAPL", "5m", full)
+        summary = report_intraday_health("5m", bronze_dir)
+        assert summary["symbols_scanned"] == 1
+        assert summary["symbols_with_gaps"] == 0
+
+    def test_symbol_with_interior_gap(self, tmp_path):
+        bronze_dir = tmp_path / "bronze"
+        d = date(2026, 4, 6)
+        full = sorted(generate_expected_intraday_timestamps([d], "5m"))
+        full.pop(40)
+        _write_intraday_parquet(bronze_dir, "AAPL", "5m", full)
+        summary = report_intraday_health("5m", bronze_dir)
+        assert summary["symbols_with_gaps"] == 1
+        assert summary["total_missing"] == 1
+        assert "AAPL" in summary["by_symbol"]
+
+    def test_symbol_filter(self, tmp_path):
+        bronze_dir = tmp_path / "bronze"
+        d = date(2026, 4, 6)
+        full = sorted(generate_expected_intraday_timestamps([d], "5m"))
+        _write_intraday_parquet(bronze_dir, "AAPL", "5m", full[:-2])
+        _write_intraday_parquet(bronze_dir, "MSFT", "5m", full[:-2])
+        summary = report_intraday_health("5m", bronze_dir, symbol_filter="AAPL")
+        assert summary["symbols_scanned"] == 1
+        assert "AAPL" in summary["by_symbol"]
+        assert "MSFT" not in summary["by_symbol"]
+
+    def test_empty_bronze(self, tmp_path):
+        bronze_dir = tmp_path / "bronze"
+        bronze_dir.mkdir()
+        summary = report_intraday_health("5m", bronze_dir)
+        assert summary["symbols_scanned"] == 0
+
+
+# ── repair_intraday_window ────────────────────────────────────────────────────
+
+
+class TestRepairIntradayWindow:
+    def test_invokes_subprocess_with_expected_args(self):
+        with patch("scripts.health_check.subprocess.run") as mock_run:
+            mock_run.return_value = SimpleNamespace(returncode=0)
+            rc = repair_intraday_window(
+                symbol="AAPL",
+                timeframe="5m",
+                since=date(2026, 4, 1),
+                host="127.0.0.1",
+                port=4001,
+            )
+            assert rc == 0
+            cmd = mock_run.call_args[0][0]
+            assert "fetch_ib_historical.py" in cmd[1]
+            assert "--tickers" in cmd and "AAPL" in cmd
+            assert "--timeframe" in cmd and "5m" in cmd
+            assert "--start" in cmd and "2026-04-01" in cmd
+
+    def test_propagates_nonzero_returncode(self):
+        with patch("scripts.health_check.subprocess.run") as mock_run:
+            mock_run.return_value = SimpleNamespace(returncode=2)
+            rc = repair_intraday_window("AAPL", "5m", date(2026, 4, 1), "h", 4001)
+            assert rc == 2
+
+
+# ── main() intraday branch ────────────────────────────────────────────────────
+
+
+class TestMainIntradayBranch:
+    def test_intraday_requires_timeframe(self):
+        with patch.object(sys, "argv", ["health_check.py", "--intraday"]):
+            with pytest.raises(SystemExit):
+                main()
+
+    def test_default_intraday_no_subprocess(self, tmp_path, monkeypatch):
+        bronze_dir = tmp_path / "bronze"
+        d = date(2026, 4, 6)
+        full = sorted(generate_expected_intraday_timestamps([d], "5m"))
+        _write_intraday_parquet(bronze_dir, "AAPL", "5m", full)
+        monkeypatch.setattr(
+            "scripts.health_check._resolve_bronze_dir", lambda ac: bronze_dir
+        )
+        with patch("scripts.health_check.subprocess.run") as mock_run:
+            with patch.object(
+                sys, "argv",
+                ["health_check.py", "--intraday", "--timeframe", "5m", "--force"],
+            ):
+                main()
+        assert mock_run.call_count == 0
+
+    def test_full_scope_invokes_repair_subprocess(self, tmp_path, monkeypatch):
+        bronze_dir = tmp_path / "bronze"
+        d = date(2026, 4, 6)
+        full = sorted(generate_expected_intraday_timestamps([d], "5m"))
+        _write_intraday_parquet(bronze_dir, "AAPL", "5m", full)
+        monkeypatch.setattr(
+            "scripts.health_check._resolve_bronze_dir", lambda ac: bronze_dir
+        )
+        with patch("scripts.health_check.subprocess.run") as mock_run:
+            mock_run.return_value = SimpleNamespace(returncode=0)
+            with patch.object(
+                sys, "argv",
+                [
+                    "health_check.py", "--intraday", "--timeframe", "5m",
+                    "--symbol", "AAPL", "--since", "2026-04-01", "--force",
+                ],
+            ):
+                main()
+        assert mock_run.call_count == 1
+        cmd = mock_run.call_args[0][0]
+        assert "AAPL" in cmd
+
+    def test_partial_scope_symbol_only_no_repair(self, tmp_path, monkeypatch):
+        bronze_dir = tmp_path / "bronze"
+        d = date(2026, 4, 6)
+        full = sorted(generate_expected_intraday_timestamps([d], "5m"))
+        _write_intraday_parquet(bronze_dir, "AAPL", "5m", full)
+        monkeypatch.setattr(
+            "scripts.health_check._resolve_bronze_dir", lambda ac: bronze_dir
+        )
+        with patch("scripts.health_check.subprocess.run") as mock_run:
+            with patch.object(
+                sys, "argv",
+                [
+                    "health_check.py", "--intraday", "--timeframe", "5m",
+                    "--symbol", "AAPL", "--force",
+                ],
+            ):
+                main()
+        assert mock_run.call_count == 0
+
+    def test_dry_run_skips_repair_even_with_full_scope(self, tmp_path, monkeypatch):
+        bronze_dir = tmp_path / "bronze"
+        d = date(2026, 4, 6)
+        full = sorted(generate_expected_intraday_timestamps([d], "5m"))
+        _write_intraday_parquet(bronze_dir, "AAPL", "5m", full)
+        monkeypatch.setattr(
+            "scripts.health_check._resolve_bronze_dir", lambda ac: bronze_dir
+        )
+        with patch("scripts.health_check.subprocess.run") as mock_run:
+            with patch.object(
+                sys, "argv",
+                [
+                    "health_check.py", "--intraday", "--timeframe", "5m",
+                    "--symbol", "AAPL", "--since", "2026-04-01",
+                    "--dry-run", "--force",
+                ],
+            ):
+                main()
+        assert mock_run.call_count == 0
+
+    def test_repair_nonzero_logged(self, tmp_path, monkeypatch):
+        bronze_dir = tmp_path / "bronze"
+        d = date(2026, 4, 6)
+        full = sorted(generate_expected_intraday_timestamps([d], "5m"))
+        _write_intraday_parquet(bronze_dir, "AAPL", "5m", full)
+        monkeypatch.setattr(
+            "scripts.health_check._resolve_bronze_dir", lambda ac: bronze_dir
+        )
+        with patch("scripts.health_check.subprocess.run") as mock_run:
+            mock_run.return_value = SimpleNamespace(returncode=3)
+            with patch.object(
+                sys, "argv",
+                [
+                    "health_check.py", "--intraday", "--timeframe", "5m",
+                    "--symbol", "AAPL", "--since", "2026-04-01", "--force",
+                ],
+            ):
+                main()
+        assert mock_run.call_count == 1

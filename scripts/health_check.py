@@ -6,19 +6,30 @@ import argparse
 import logging
 import os
 import subprocess
-from datetime import date, timedelta
+import sys
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from rich.console import Console
 
 from clients import BronzeClient
+from clients.intraday_bronze_client import (
+    INTRADAY_PARQUET_FILENAME,
+    INTRADAY_TIMEFRAMES,
+    IntradayBronzeClient,
+)
 from scripts.daily_update import (
     _make_contract,
     bars_to_futures_rows,
     bars_to_rows,
     is_trading_day,
+    session_close_time,
     validate_bars,
 )
+
+_ET = ZoneInfo("America/New_York")
+_BAR_SIZE_MINUTES = {"1h": 60, "5m": 5}
 
 log = logging.getLogger(__name__)
 
@@ -145,6 +156,166 @@ def get_all_trade_dates(bronze: BronzeClient) -> dict[str, list[date]]:
     return result
 
 
+def generate_expected_intraday_timestamps(
+    trading_days: list[date], timeframe: str
+) -> set[datetime]:
+    """Return the set of expected RTH bar timestamps (UTC) for *trading_days*.
+
+    For each trading day, emit timestamps starting at 9:30 ET, stepping by the
+    bar size, up to but **not including** the session close (last bar's *start*
+    must be strictly before close so it covers a full bar interval).
+    """
+    if timeframe not in _BAR_SIZE_MINUTES:
+        raise ValueError(f"unsupported intraday timeframe: {timeframe!r}")
+    step = timedelta(minutes=_BAR_SIZE_MINUTES[timeframe])
+
+    expected: set[datetime] = set()
+    for d in trading_days:
+        if not is_trading_day(d):
+            continue
+        rth_open = datetime.combine(d, time(9, 30), tzinfo=_ET)
+        close_t = session_close_time(d)
+        rth_close = datetime.combine(d, close_t, tzinfo=_ET)
+        if timeframe == "1h":
+            # 1h grid is anchored to :30 ET
+            current = rth_open
+        else:
+            current = rth_open
+        while current + step <= rth_close:
+            expected.add(current.astimezone(timezone.utc))
+            current += step
+    return expected
+
+
+def find_intraday_gaps(
+    actual_timestamps: list[datetime], timeframe: str
+) -> tuple[list[datetime], list[tuple[datetime, datetime]]]:
+    """Return ``(missing_interior, suspected_halts)`` for an intraday series.
+
+    *actual_timestamps* must be tz-aware UTC datetimes. Interior means dates
+    strictly between the first and last actual trading day inclusive — gaps
+    outside that envelope (e.g. before IPO or after IB depth roll) are excluded.
+
+    Suspected halts are contiguous runs of missing bars shorter than 30 minutes,
+    surrounded on both sides by actual bars (annotation only — no action).
+    """
+    if len(actual_timestamps) < 2:
+        return [], []
+
+    actual = {ts.astimezone(timezone.utc) for ts in actual_timestamps}
+    days = sorted({ts.astimezone(_ET).date() for ts in actual})
+    expected = generate_expected_intraday_timestamps(days, timeframe)
+
+    missing = sorted(expected - actual)
+    if not missing:
+        return [], []
+
+    step = timedelta(minutes=_BAR_SIZE_MINUTES[timeframe])
+    halt_threshold = timedelta(minutes=30)
+    halts: list[tuple[datetime, datetime]] = []
+
+    # Group consecutive missing into runs and flag short ones as halts
+    run_start = missing[0]
+    prev = missing[0]
+    for ts in missing[1:]:
+        if ts - prev == step:
+            prev = ts
+            continue
+        if (prev - run_start) + step < halt_threshold:
+            halts.append((run_start, prev))
+        run_start = ts
+        prev = ts
+    if (prev - run_start) + step < halt_threshold:
+        halts.append((run_start, prev))
+
+    return missing, halts
+
+
+def report_intraday_health(
+    timeframe: str,
+    bronze_dir: Path,
+    symbol_filter: str | None = None,
+) -> dict:
+    """Scan intraday parquet for *timeframe* and return a summary dict.
+
+    Report-only — never modifies data. Prints a Rich summary table.
+    """
+    intraday = IntradayBronzeClient(bronze_dir=bronze_dir, timeframe=timeframe)
+    symbols = intraday.get_existing_symbols()
+    if symbol_filter:
+        symbols = symbols & {symbol_filter}
+
+    summary: dict = {
+        "timeframe": timeframe,
+        "symbols_scanned": 0,
+        "symbols_with_gaps": 0,
+        "total_missing": 0,
+        "total_halts": 0,
+        "by_symbol": {},
+    }
+
+    for symbol in sorted(symbols):
+        rows = intraday.read_symbol_rows(symbol)
+        timestamps = [row["bar_timestamp"] for row in rows]
+        missing, halts = find_intraday_gaps(timestamps, timeframe)
+        summary["symbols_scanned"] += 1
+        if missing:
+            summary["symbols_with_gaps"] += 1
+            summary["total_missing"] += len(missing)
+            summary["total_halts"] += len(halts)
+            summary["by_symbol"][symbol] = {
+                "missing": len(missing),
+                "halts": len(halts),
+            }
+            console.print(
+                f"  [red]{symbol}[/red] {timeframe}: "
+                f"{len(missing)} missing bars, {len(halts)} suspected halts"
+            )
+
+    if summary["symbols_scanned"] == 0:
+        console.print(
+            f"[yellow]No symbols found at {timeframe} under {bronze_dir}[/yellow]"
+        )
+    elif summary["symbols_with_gaps"] == 0:
+        console.print(
+            f"[green]{summary['symbols_scanned']} symbols clean at {timeframe}[/green]"
+        )
+    else:
+        console.print(
+            f"\n[bold]{summary['symbols_with_gaps']}/{summary['symbols_scanned']} symbols "
+            f"have interior gaps at {timeframe} "
+            f"({summary['total_missing']} missing bars, {summary['total_halts']} halts)[/bold]"
+        )
+
+    return summary
+
+
+def repair_intraday_window(
+    symbol: str,
+    timeframe: str,
+    since: date,
+    host: str,
+    port: int,
+) -> int:
+    """Shell out to fetch_ib_historical.py to repair a single symbol/timeframe window.
+
+    Returns the subprocess exit code. The narrow scope (one symbol, one
+    timeframe, explicit since-date) is enforced by the caller in main().
+    """
+    cmd = [
+        sys.executable,
+        str(_SCRIPT_DIR / "fetch_ib_historical.py"),
+        "--tickers", symbol,
+        "--timeframe", timeframe,
+        "--start", since.isoformat(),
+        "--host", host,
+        "--port", str(port),
+    ]
+    console.print(f"[cyan]Repairing {symbol} {timeframe} since {since}[/cyan]")
+    result = subprocess.run(cmd, check=False)
+    return result.returncode
+
+
 def _send_alert(
     run_date: str,
     asset_class: str,
@@ -199,9 +370,64 @@ def main() -> None:
         default=10,
         help="Number of repaired gaps that triggers an email alert (default: 10)",
     )
+    parser.add_argument(
+        "--intraday",
+        action="store_true",
+        help="Run intraday (1h/5m) health check instead of daily",
+    )
+    parser.add_argument(
+        "--timeframe",
+        choices=list(INTRADAY_TIMEFRAMES),
+        help="Intraday timeframe to scan (required with --intraday)",
+    )
+    parser.add_argument(
+        "--symbol",
+        type=str,
+        help="Restrict intraday scan to a single symbol (and enable repair when "
+        "combined with --since)",
+    )
+    parser.add_argument(
+        "--since",
+        type=date.fromisoformat,
+        help="Start date for targeted intraday repair (YYYY-MM-DD). Repair fires "
+        "only when --symbol, --since, and --timeframe are all set.",
+    )
     args = parser.parse_args()
 
     today = date.today()
+
+    # ── Intraday branch ──────────────────────────────────────────────
+    if args.intraday:
+        if not args.timeframe:
+            parser.error("--intraday requires --timeframe {1h,5m}")
+        bronze_dir = _resolve_bronze_dir("equity")
+        console.print(
+            f"\n[bold]Intraday Health Check[/bold]  date={today}  "
+            f"timeframe={args.timeframe}  symbol={args.symbol or '*'}"
+        )
+        report_intraday_health(
+            timeframe=args.timeframe,
+            bronze_dir=bronze_dir,
+            symbol_filter=args.symbol,
+        )
+        # Implicit repair when fully scoped
+        if args.symbol and args.since and not args.dry_run:
+            rc = repair_intraday_window(
+                symbol=args.symbol,
+                timeframe=args.timeframe,
+                since=args.since,
+                host=args.host,
+                port=args.port,
+            )
+            if rc != 0:
+                console.print(
+                    f"[red]Repair subprocess exited with code {rc}[/red]"
+                )
+        elif args.symbol and not args.since:
+            console.print(
+                "[dim]Report-only: pass --since YYYY-MM-DD to enable repair[/dim]"
+            )
+        return
 
     # ── Trading day check ─────────────────────────────────────────────
     if not args.force and not is_trading_day(today):
