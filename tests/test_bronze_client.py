@@ -9,6 +9,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from clients.bronze_client import BronzeClient
+from clients.parquet_io import validate_parquet_file
 from clients.symbol_ids import stable_symbol_id
 
 
@@ -149,7 +150,7 @@ class TestBronzeClient:
         def _boom(src, dst):
             raise OSError("replace failed")
 
-        monkeypatch.setattr("clients.bronze_client.os.replace", _boom)
+        monkeypatch.setattr("clients.parquet_io.os.replace", _boom)
 
         with pytest.raises(OSError, match="replace failed"):
             bronze.replace_ticker_rows(
@@ -170,7 +171,7 @@ class TestBronzeClient:
             mismatch_path,
         )
         with pytest.raises(ValueError, match="expected 2 rows, found 1"):
-            bronze._validate_parquet_file(mismatch_path, expected_rows=2)
+            validate_parquet_file(mismatch_path, expected_rows=2, sort_column="trade_date")
 
         unsorted_path = tmp_path / "unsorted.parquet"
         pq.write_table(
@@ -183,7 +184,7 @@ class TestBronzeClient:
             unsorted_path,
         )
         with pytest.raises(ValueError, match="not sorted ascending"):
-            bronze._validate_parquet_file(unsorted_path, expected_rows=2)
+            validate_parquet_file(unsorted_path, expected_rows=2, sort_column="trade_date")
 
         duplicate_path = tmp_path / "duplicate.parquet"
         pq.write_table(
@@ -196,7 +197,7 @@ class TestBronzeClient:
             duplicate_path,
         )
         with pytest.raises(ValueError, match="duplicate trade_date"):
-            bronze._validate_parquet_file(duplicate_path, expected_rows=2)
+            validate_parquet_file(duplicate_path, expected_rows=2, sort_column="trade_date")
 
     @pytest.mark.integration
     def test_normalize_trade_date_variants(self, bronze):

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
-import time
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -13,6 +11,7 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from clients.parquet_io import publish_parquet
 from clients.symbol_ids import stable_symbol_id
 
 log = logging.getLogger(__name__)
@@ -282,20 +281,10 @@ class BronzeClient:
 
     def _publish_symbol_rows(self, symbol: str, rows: list[dict[str, Any]]) -> Path:
         out_path = self._symbol_path(symbol)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = out_path.with_name(f".{PARQUET_FILENAME}.{os.getpid()}.{time.time_ns()}.tmp")
         table = self._table_from_rows(rows)
-
-        try:
-            pq.write_table(table, tmp_path, compression="snappy")
-            self._validate_parquet_file(tmp_path, expected_rows=len(rows))
-            os.replace(tmp_path, out_path)
-        finally:
-            if tmp_path.exists():
-                tmp_path.unlink()
-
-        log.info("Published %s", out_path)
-        return out_path
+        result = publish_parquet(out_path, table, sort_column="trade_date")
+        log.info("Published %s", result)
+        return result
 
     def _table_from_rows(self, rows: list[dict[str, Any]]) -> pa.Table:
         if self._asset_class == "futures":
@@ -331,22 +320,6 @@ class BronzeClient:
             for row in rows
         ]
         return pa.Table.from_pylist(payload, schema=self._schema)
-
-    def _validate_parquet_file(self, path: Path, expected_rows: int) -> None:
-        table = pq.read_table(path, columns=list(self._columns))
-        if table.num_rows != expected_rows:
-            raise ValueError(
-                f"{path}: expected {expected_rows} rows, found {table.num_rows}"
-            )
-
-        trade_dates = [
-            value.isoformat() if isinstance(value, date) else str(value)
-            for value in table.column("trade_date").to_pylist()
-        ]
-        if trade_dates != sorted(trade_dates):
-            raise ValueError(f"{path}: trade_date values are not sorted ascending")
-        if len(trade_dates) != len(set(trade_dates)):
-            raise ValueError(f"{path}: duplicate trade_date values detected")
 
     def _normalize_trade_date(self, value: Any) -> date:
         if isinstance(value, datetime):
