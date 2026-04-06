@@ -1,0 +1,28 @@
+{
+  "name": "core-etfs",
+  "description": "Always-include ETFs — added to the screened universe regardless of scanner output. Covers broad market, sectors, international, commodities, bonds, vol, leveraged, and crypto for backtesting, intraday signals, and options analytics.",
+  "groups": {
+    "broad_market":  {"description": "U.S. broad market index ETFs",                    "tickers": ["SPY", "QQQ", "IWM", "DIA", "VTI"]},
+    "sectors_spdr":  {"description": "All 11 SPDR sector ETFs",                         "tickers": ["XLF", "XLE", "XLK", "XLV", "XLI", "XLP", "XLY", "XLU", "XLB", "XLRE", "XLC"]},
+    "industry":      {"description": "Key industry ETFs not in SPDR sectors",           "tickers": ["SMH"]},
+    "international": {"description": "Country and regional ETFs",                       "tickers": ["EFA", "EEM", "EWJ", "EWY", "EWZ", "FXI", "KWEB"]},
+    "metals":        {"description": "Precious metals — gold and silver",               "tickers": ["GLD", "SLV"]},
+    "commodities":   {"description": "Energy and ag commodities — macro exposure",      "tickers": ["USO"]},
+    "bonds":         {"description": "Treasury, IG, HY, aggregate — rates and credit",  "tickers": ["TLT", "IEF", "HYG", "LQD", "AGG"]},
+    "volatility":    {"description": "VIX-tracking ETFs — options analytics",           "tickers": ["VXX", "UVXY"]},
+    "leveraged":     {"description": "Leveraged broad market — intraday signals",       "tickers": ["TQQQ", "SQQQ"]},
+    "crypto":        {"description": "Spot crypto ETFs",                                "tickers": ["IBIT"]}
+  },
+  "tickers": [
+    "SPY", "QQQ", "IWM", "DIA", "VTI",
+    "XLF", "XLE", "XLK", "XLV", "XLI", "XLP", "XLY", "XLU", "XLB", "XLRE", "XLC",
+    "SMH",
+    "EFA", "EEM", "EWJ", "EWY", "EWZ", "FXI", "KWEB",
+    "GLD", "SLV",
+    "USO",
+    "TLT", "IEF", "HYG", "LQD", "AGG",
+    "VXX", "UVXY",
+    "TQQQ", "SQQQ",
+    "IBIT"
+  ]
+}
