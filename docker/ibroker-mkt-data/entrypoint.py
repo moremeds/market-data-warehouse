@@ -75,6 +75,20 @@ def run_intraday_update(force: bool = False) -> int:
     return _run_cmd(cmd, "Intraday update")
 
 
+def run_coverage_report(force: bool = False) -> int:
+    """Daily coverage check + auto-recovery (Phase 2)."""
+    cmd = [_python(), str(SCRIPTS_DIR / "coverage_report.py")]
+    if force:
+        cmd.append("--force")
+    return _run_cmd(cmd, "Coverage report")
+
+
+def run_weekly_quality_summary() -> int:
+    """Weekly quality markdown summary (self-skips on non-Sunday)."""
+    cmd = [_python(), str(SCRIPTS_DIR / "weekly_quality_summary.py")]
+    return _run_cmd(cmd, "Weekly quality summary")
+
+
 def run_seed(preset: str, years: int = 10, skip_existing: bool = True) -> int:
     """Run initial backfill from a preset."""
     cmd = [
@@ -130,7 +144,7 @@ def run_rebuild(preset: str, years: int = 10) -> int:
 
 
 def run_job_cycle(force: bool = False) -> int:
-    """Full job cycle: download from R2 → daily update → intraday update → upload."""
+    """Full job cycle: R2 download → daily → intraday → upload → coverage → weekly."""
     logger.info("=== Starting job cycle ===")
 
     # Step 1: Rehydrate local bronze from R2
@@ -153,6 +167,18 @@ def run_job_cycle(force: bool = False) -> int:
             return upload_rc
     else:
         logger.warning("Update failed (rc=%d), skipping R2 upload", rc)
+
+    # Step 5: Coverage report + auto-recovery (soft — failures here do not
+    # poison the job cycle since the upload already succeeded)
+    if rc == 0:
+        cov_rc = run_coverage_report(force=force)
+        if cov_rc != 0:
+            logger.warning("Coverage report failed (rc=%d), continuing", cov_rc)
+
+        # Step 6: Weekly quality summary — self-skips on non-Sunday
+        weekly_rc = run_weekly_quality_summary()
+        if weekly_rc != 0:
+            logger.warning("Weekly quality summary failed (rc=%d), continuing", weekly_rc)
 
     logger.info("=== Job cycle complete (rc=%d) ===", rc)
     return rc
