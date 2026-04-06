@@ -35,6 +35,9 @@ market-data-warehouse/              # Git repo
 │   ├── run_daily_update_watchdog.sh # Shell wrapper for the daily-update watchdog
 │   ├── cerebras_client.mjs         # Cerebras incident-summary client for failure alerts
 │   ├── send_daily_update_failure_email.mjs # Nodemailer failure alert CLI
+│   ├── coverage_report.py          # Daily coverage check + auto-recovery (Phase 2)
+│   ├── weekly_quality_summary.py   # Sunday-only weekly markdown quality report
+│   ├── backfill_intraday.py        # Full historical 1h/5m backfill orchestrator
 │   ├── com.market-warehouse.daily-update.plist.example  # macOS launchd template
 │   ├── com.market-warehouse.daily-update-watchdog.plist.example # macOS launchd watchdog template
 │   └── pre-commit-secrets-scan.sh  # Pre-commit hook: secrets scanner
@@ -289,6 +292,65 @@ The main sync runs at 13:05 Pacific local time daily (4:05 PM Eastern year-round
 - Terminal scheduled failures use the Nodemailer CLI at `scripts/send_daily_update_failure_email.mjs`
 - Failure alerts can write a sibling `.human.md` incident report and optionally enrich the email body with a Cerebras-generated summary plus proposed remediation
 - Failure emails can include Cerebras-generated human-readable incident summaries and write a sibling `*.human.md` incident report beside the raw log
+
+### Intraday backfill (1h / 5m)
+
+`scripts/backfill_intraday.py` is the canonical entry point for full historical intraday backfills. It is the **only** script in the repo that actually pulls 1h/5m bars from IB — `fetch_ib_historical.py` is daily-only and `intraday_update.py` is a session-state classifier. Reuses `compute_intraday_chunks` (1 W chunks for 5m, 1 M for 1h) and `validate_intraday_bar` from the Phase 1 plumbing; rejected bars are logged but never written to bronze.
+
+```bash
+source ~/market-warehouse/.venv/bin/activate
+python scripts/backfill_intraday.py --timeframe 5m --tickers AAPL MSFT          # Explicit list
+python scripts/backfill_intraday.py --timeframe 1h --preset presets/sp500.json  # Preset
+python scripts/backfill_intraday.py --timeframe 5m --tickers AAPL --dry-run     # Plan only
+python scripts/backfill_intraday.py --timeframe 5m --preset presets/screened-universe.json --skip-existing
+python scripts/backfill_intraday.py --timeframe 5m --preset presets/sp500.json --max-tickers 50
+```
+
+- Per-timeframe cursor: `~/market-warehouse/cursors/cursor_intraday_{1h,5m}_{preset}.json`. Resumes after interrupt.
+- IB error 162/200 ("HMDS no data" / ambiguous contract) marks the ticker complete and moves on — no infinite retry loop.
+- Default depth: 2 years for 1h, 1 year for 5m (matches `INTRADAY_MAX_DEPTH`).
+- `--skip-existing` consults `min(bar_timestamp)` in the existing per-ticker parquet and skips if it already covers the requested depth.
+- IB BarData with `formatDate=1` returns naive ET datetimes; the script attaches `America/New_York` and converts to UTC before validation/merge.
+- Logs to `~/market-warehouse/logs/backfill_intraday_{1h,5m}_YYYY-MM-DD.log`.
+
+### Coverage tracking + auto-recovery
+
+`scripts/coverage_report.py` runs every day after the upload step in the container entrypoint. For each of the three timeframes (1d, 1h, 5m) it counts how many symbols have bars current as-of the target trading day, writes a one-line summary to `~/market-warehouse/logs/coverage_YYYY-MM-DD.log`, and — when coverage drops below `MDW_COVERAGE_ALERT_THRESHOLD` (default `0.95`) — triggers a targeted backfill subprocess and re-checks.
+
+```bash
+python scripts/coverage_report.py                                # Today's coverage + auto-recovery
+python scripts/coverage_report.py --no-recover                   # Report only
+python scripts/coverage_report.py --target-date 2026-04-06       # Specific trading day
+python scripts/coverage_report.py --threshold 0.99               # Stricter threshold
+python scripts/coverage_report.py --force                        # Run on a non-trading day
+```
+
+- 1d recovery shells out to `fetch_ib_historical.py`; 1h/5m recovery shells out to `backfill_intraday.py`.
+- **Safety cap (default 100):** if more than N symbols are missing for any single timeframe, the script aborts the auto-recovery and emails immediately. This prevents a runaway IB rate-limit hit when an entire daily run failed for some other reason.
+- Email goes out only when post-recovery gaps remain. A fully successful recovery downgrades to an INFO log — no false-positive email storms.
+- Reuses the existing Nodemailer alert path at `scripts/send_daily_update_failure_email.mjs`.
+
+### Weekly quality summary
+
+`scripts/weekly_quality_summary.py` is a pure parser over the seven daily coverage logs from the previous ISO week. Self-skips on non-Sunday so the entrypoint can call it unconditionally every day.
+
+```bash
+python scripts/weekly_quality_summary.py            # Sunday: write the report; other days: noop
+python scripts/weekly_quality_summary.py --force    # Render anyway
+python scripts/weekly_quality_summary.py --week 2026-14
+```
+
+Output: `~/market-warehouse/logs/quality_weekly_YYYY-WW.md` with a coverage trend table, symbol churn (added/removed), and persistent gaps (≥3 consecutive missing days at any timeframe).
+
+### Health check (intraday)
+
+`scripts/health_check.py --intraday --timeframe {1h,5m}` performs interior gap detection for the intraday parquet, with optional suspected-halt annotation (contiguous gap < 30 min surrounded by normal bars). Default behaviour is **report-only**. When `--symbol`, `--since`, and `--timeframe` are all set, the script implicitly repairs that narrow window by shelling out to `backfill_intraday.py` (no separate `--repair` flag — full scope means repair).
+
+```bash
+python scripts/health_check.py --intraday --timeframe 5m                       # Scan all symbols
+python scripts/health_check.py --intraday --timeframe 5m --symbol AAPL         # Scan one symbol
+python scripts/health_check.py --intraday --timeframe 5m --symbol AAPL --since 2026-04-01  # Repair window
+```
 
 ### Rebuilding DuckDB
 

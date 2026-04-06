@@ -74,6 +74,10 @@ Current live shape:
 - `scripts/fetch_cboe_volatility.py` fetches all CBOE volatility indices directly from CBOE's public API. This is the authoritative daily sync source for VIX, VVIX, VXHYG, VXSMH, and all other volatility indices in `presets/volatility.json`.
 - `scripts/run_daily_update_job.py` syncs equities and futures via IB, then all volatility indices via CBOE in a single daemon run.
 - `scripts/rebuild_duckdb_from_parquet.py` rebuilds DuckDB from bronze when a local DB file is needed and recreates the analytical tables from scratch on each run.
+- `scripts/backfill_intraday.py` is the canonical entry point for full historical 1h/5m backfills. It is the **only** script that actually fetches intraday bars from IB — `fetch_ib_historical.py` is daily-only and `intraday_update.py` only classifies session state. Reuses `compute_intraday_chunks` (1 W chunks for 5m, 1 M for 1h) and `validate_intraday_bar`. Per-timeframe cursor at `~/market-warehouse/cursors/cursor_intraday_{tf}_{name}.json`.
+- `scripts/coverage_report.py` runs after the upload step in the entrypoint job cycle. Writes a one-line coverage summary per day, and triggers a targeted backfill when any timeframe drops below `MDW_COVERAGE_ALERT_THRESHOLD` (default `0.95`). 1d branch shells out to `fetch_ib_historical.py`; 1h/5m branch shells out to `backfill_intraday.py`. Safety cap of 100 missing symbols aborts the auto-recovery and emails immediately. Email goes out only when post-recovery gaps remain.
+- `scripts/weekly_quality_summary.py` aggregates seven daily coverage logs into `~/market-warehouse/logs/quality_weekly_YYYY-WW.md`. Self-skips on non-Sunday so it can be called daily without a date branch.
+- `scripts/health_check.py --intraday` is report-only by default. Repair fires implicitly only when `--symbol`, `--since`, and `--timeframe` are all set (targeted, narrow, explicit) and shells out to `backfill_intraday.py`.
 - The native macOS app (build scripts, Metal shaders, UI smoke tests) has been extracted to the standalone Sift repo at `~/dev/apps/util/sift/`.
 - Daily fallback provider order for equities:
   - Nasdaq historical quote API with `assetclass=stocks`
