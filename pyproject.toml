@@ -12,7 +12,12 @@ markers = [
 
 [tool.coverage.run]
 source = ["clients", "scripts"]
-omit = ["tests/*", "clients/ib_client.py", "clients/historical_provider.py"]
+omit = [
+    "tests/*",
+    "clients/ib_client.py",
+    "clients/historical_provider.py",
+    "scripts/probe_ib_intraday.py",
+]
 
 [tool.coverage.report]
 fail_under = 100

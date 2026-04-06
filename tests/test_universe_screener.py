@@ -248,6 +248,24 @@ class TestRunScannerSweeps:
         result = asyncio.new_event_loop().run_until_complete(run_scanner_sweeps(ib))
         assert result.count("AAPL") if isinstance(result, list) else len([x for x in result if x == "AAPL"]) == 1
 
+    def test_failed_scanner_request_caught_and_logged(self, monkeypatch, caplog):
+        """An exception in reqScannerDataAsync should be caught and logged, not raised."""
+        monkeypatch.setattr("scripts.universe_screener._SCANNER_THROTTLE_SECONDS", 0)
+        ib = MagicMock()
+
+        async def failing_req_scanner(sub):
+            raise RuntimeError("IB scanner unavailable")
+
+        ib.reqScannerDataAsync = failing_req_scanner
+
+        import logging
+        with caplog.at_level(logging.WARNING):
+            result = asyncio.new_event_loop().run_until_complete(run_scanner_sweeps(ib))
+        # No symbols returned, all sweeps failed silently
+        assert result == set()
+        # At least one warning logged
+        assert any("Scanner" in r.message and "failed" in r.message for r in caplog.records)
+
 
 # ══════════════════════════════════════════════════════════════════════
 # _send_screener_alert
