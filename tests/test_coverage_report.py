@@ -224,6 +224,24 @@ class TestAutoRecover:
         assert outcome.recovered == 1
         assert outcome.still_missing == []
 
+    def test_daily_recovery_uses_fetch_ib_historical(self, seeded_bronze):
+        # 1d branch shells out to fetch_ib_historical.py, not backfill_intraday.py
+        target = date(2026, 4, 6)
+        (seeded_bronze / "asset_class=equity" / "symbol=AAPL" / "1d.parquet").unlink()
+
+        def fake_run(cmd, **kwargs):
+            _write_daily(seeded_bronze, "AAPL", [target])
+            return SimpleNamespace(returncode=0)
+
+        with patch("scripts.coverage_report.subprocess.run", side_effect=fake_run) as mock_run:
+            outcome = auto_recover(
+                "1d", ["AAPL"], bronze_root=seeded_bronze, target_date=target
+            )
+        assert outcome.recovered == 1
+        cmd = mock_run.call_args[0][0]
+        assert "fetch_ib_historical.py" in cmd[1]
+        assert "--timeframe" not in cmd  # daily fetch doesn't pass --timeframe
+
     def test_partial_recovery_path(self, seeded_bronze):
         target = date(2026, 4, 6)
         (seeded_bronze / "asset_class=equity" / "symbol=AAPL" / "5m.parquet").unlink()
@@ -352,7 +370,7 @@ class TestMain:
         monkeypatch.setattr("scripts.coverage_report._LOG_DIR", tmp_path / "logs")
 
         def fake_run(cmd, **kwargs):
-            if "fetch_ib_historical.py" in str(cmd):
+            if "backfill_intraday.py" in str(cmd):
                 _write_intraday(root, "AAPL", "5m", [target])
             return SimpleNamespace(returncode=0)
 
@@ -381,7 +399,7 @@ class TestMain:
         monkeypatch.setattr("scripts.coverage_report._LOG_DIR", tmp_path / "logs")
 
         def fake_run(cmd, **kwargs):
-            if "fetch_ib_historical.py" in str(cmd):
+            if "backfill_intraday.py" in str(cmd):
                 _write_intraday(root, "AAPL", "5m", [target])  # only AAPL recovered
             return SimpleNamespace(returncode=0)
 
@@ -419,7 +437,7 @@ class TestMain:
                 ):
                     main()
         # No fetch subprocess (safety cap), but email IS sent
-        fetch_calls = [c for c in mock_run.call_args_list if "fetch_ib_historical.py" in str(c[0][0])]
+        fetch_calls = [c for c in mock_run.call_args_list if "backfill_intraday.py" in str(c[0][0])]
         node_calls = [c for c in mock_run.call_args_list if c[0][0][0] == "node"]
         assert fetch_calls == []
         assert len(node_calls) == 1

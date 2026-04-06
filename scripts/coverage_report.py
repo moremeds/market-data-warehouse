@@ -186,12 +186,19 @@ def auto_recover(
             reason=f"safety_cap (>{safety_cap} missing symbols)",
         )
 
-    cmd = [
-        sys.executable,
-        str(_SCRIPT_DIR / "fetch_ib_historical.py"),
-        "--tickers", *missing_symbols,
-        "--timeframe", timeframe,
-    ]
+    if timeframe == "1d":
+        cmd = [
+            sys.executable,
+            str(_SCRIPT_DIR / "fetch_ib_historical.py"),
+            "--tickers", *missing_symbols,
+        ]
+    else:
+        cmd = [
+            sys.executable,
+            str(_SCRIPT_DIR / "backfill_intraday.py"),
+            "--timeframe", timeframe,
+            "--tickers", *missing_symbols,
+        ]
     console.print(
         f"[cyan]Auto-recover {timeframe}: launching backfill for "
         f"{len(missing_symbols)} symbols[/cyan]"

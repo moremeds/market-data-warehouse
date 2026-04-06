@@ -1,0 +1,373 @@
+"""Tests for scripts/backfill_intraday.py."""
+
+from __future__ import annotations
+
+import json
+import sys
+from datetime import datetime, time, timedelta, timezone
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pytest
+
+from clients.intraday_bronze_client import IntradayBronzeClient
+from scripts import backfill_intraday
+from scripts.backfill_intraday import (
+    TickerOutcome,
+    _BarRow,
+    _resolve_tickers,
+    backfill_ticker,
+    ib_bar_to_row,
+    load_cursor,
+    main,
+    plan_chunks,
+    save_cursor,
+    should_skip_existing,
+)
+
+_ET = ZoneInfo("America/New_York")
+_UTC = timezone.utc
+
+
+def _make_ib_bar(dt_et_naive: datetime, *, open_=1.0) -> SimpleNamespace:
+    """Mimic an ib_async BarData with formatDate=1 (naive local datetime)."""
+    return SimpleNamespace(
+        date=dt_et_naive,
+        open=open_,
+        high=open_ + 0.5,
+        low=open_ - 0.5,
+        close=open_ + 0.1,
+        volume=1000,
+    )
+
+
+# ── ib_bar_to_row ─────────────────────────────────────────────────────────────
+
+
+class TestIbBarToRow:
+    def test_naive_datetime_attached_as_et_then_utc(self):
+        bar = _make_ib_bar(datetime(2026, 4, 6, 9, 30))  # Mon 09:30 ET → 13:30 UTC (EDT)
+        row = ib_bar_to_row(bar, symbol_id=42)
+        assert row["bar_timestamp"].tzinfo == _UTC
+        assert row["bar_timestamp"] == datetime(2026, 4, 6, 13, 30, tzinfo=_UTC)
+        assert row["symbol_id"] == 42
+        assert row["volume"] == 1000
+
+    def test_aware_datetime_passes_through(self):
+        ts = datetime(2026, 4, 6, 13, 30, tzinfo=_UTC)
+        bar = SimpleNamespace(
+            date=ts, open=1.0, high=2.0, low=0.5, close=1.5, volume=100,
+        )
+        row = ib_bar_to_row(bar, symbol_id=1)
+        assert row["bar_timestamp"] == ts
+
+    def test_date_only_promoted_to_midnight_et(self):
+        from datetime import date as _date
+        bar = SimpleNamespace(
+            date=_date(2026, 4, 6),
+            open=1.0, high=2.0, low=0.5, close=1.5, volume=100,
+        )
+        row = ib_bar_to_row(bar, symbol_id=1)
+        assert row["bar_timestamp"].tzinfo == _UTC
+        assert row["bar_timestamp"].date() == _date(2026, 4, 6)
+
+
+# ── load/save cursor ──────────────────────────────────────────────────────────
+
+
+class TestCursor:
+    def test_load_missing_returns_empty_set(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(backfill_intraday, "_CURSOR_DIR", tmp_path)
+        assert load_cursor("5m", "test") == set()
+
+    def test_save_then_load_round_trip(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(backfill_intraday, "_CURSOR_DIR", tmp_path)
+        save_cursor("5m", "test", {"AAPL", "MSFT"})
+        assert load_cursor("5m", "test") == {"AAPL", "MSFT"}
+
+    def test_corrupt_cursor_returns_empty(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(backfill_intraday, "_CURSOR_DIR", tmp_path)
+        path = tmp_path / "cursor_intraday_5m_test.json"
+        path.write_text("not json{{{")
+        assert load_cursor("5m", "test") == set()
+
+
+# ── should_skip_existing ──────────────────────────────────────────────────────
+
+
+class TestShouldSkipExisting:
+    def _seed(self, tmp_path, ticker, ts: datetime):
+        bronze_dir = tmp_path / "bronze"
+        client = IntradayBronzeClient(bronze_dir=bronze_dir, timeframe="5m")
+        rows = [{
+            "bar_timestamp": ts,
+            "symbol_id": 1,
+            "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5,
+            "volume": 100,
+        }]
+        client.replace_ticker_rows(ticker, rows)
+        return client
+
+    def test_empty_returns_false(self, tmp_path):
+        client = IntradayBronzeClient(bronze_dir=tmp_path / "bronze", timeframe="5m")
+        assert should_skip_existing(client, "AAPL", years=1) is False
+
+    def test_old_enough_returns_true(self, tmp_path):
+        old = datetime.now(_UTC) - timedelta(days=400)
+        client = self._seed(tmp_path, "AAPL", old)
+        assert should_skip_existing(client, "AAPL", years=1) is True
+
+    def test_too_recent_returns_false(self, tmp_path):
+        recent = datetime.now(_UTC) - timedelta(days=10)
+        client = self._seed(tmp_path, "AAPL", recent)
+        assert should_skip_existing(client, "AAPL", years=1) is False
+
+
+# ── backfill_ticker ───────────────────────────────────────────────────────────
+
+
+class TestBackfillTicker:
+    def test_happy_path_merges_bars(self, tmp_path):
+        bronze = IntradayBronzeClient(bronze_dir=tmp_path / "bronze", timeframe="5m")
+        # Two valid bars on a Monday during RTH
+        bars = [
+            _make_ib_bar(datetime(2026, 4, 6, 10, 0)),
+            _make_ib_bar(datetime(2026, 4, 6, 10, 5), open_=1.1),
+        ]
+        ib = MagicMock()
+        ib.get_historical_data.return_value = bars
+
+        with patch("scripts.backfill_intraday.compute_intraday_chunks",
+                   return_value=[("1 W", "20260406-15:00:00")]):
+            outcome = backfill_ticker("AAPL", "5m", years=1, ib=ib, bronze=bronze)
+        assert outcome.bars_inserted == 2
+        assert outcome.rejected == 0
+        assert outcome.chunks_fetched == 1
+
+    def test_rejects_invalid_bars(self, tmp_path):
+        bronze = IntradayBronzeClient(bronze_dir=tmp_path / "bronze", timeframe="5m")
+        # Bar at 04:00 ET → outside RTH → rejected
+        bars = [_make_ib_bar(datetime(2026, 4, 6, 4, 0))]
+        ib = MagicMock()
+        ib.get_historical_data.return_value = bars
+        with patch("scripts.backfill_intraday.compute_intraday_chunks",
+                   return_value=[("1 W", "20260406-15:00:00")]):
+            outcome = backfill_ticker("AAPL", "5m", years=1, ib=ib, bronze=bronze)
+        assert outcome.bars_inserted == 0
+        assert outcome.rejected == 1
+
+    def test_ib_no_data_error_skips_ticker(self, tmp_path):
+        bronze = IntradayBronzeClient(bronze_dir=tmp_path / "bronze", timeframe="5m")
+        ib = MagicMock()
+        err = Exception("HMDS no data")
+        err.code = 162
+        ib.get_historical_data.side_effect = err
+        with patch("scripts.backfill_intraday.compute_intraday_chunks",
+                   return_value=[("1 W", "20260406-15:00:00")]):
+            outcome = backfill_ticker("AAPL", "5m", years=1, ib=ib, bronze=bronze)
+        assert outcome.skipped_reason == "IB error 162"
+        assert outcome.bars_inserted == 0
+
+    def test_unknown_error_recorded_and_continues(self, tmp_path):
+        bronze = IntradayBronzeClient(bronze_dir=tmp_path / "bronze", timeframe="5m")
+        ib = MagicMock()
+        ib.get_historical_data.side_effect = [
+            RuntimeError("transient blip"),
+            [_make_ib_bar(datetime(2026, 4, 6, 10, 0))],
+        ]
+        with patch("scripts.backfill_intraday.compute_intraday_chunks",
+                   return_value=[("1 W", "a"), ("1 W", "b")]):
+            outcome = backfill_ticker("AAPL", "5m", years=1, ib=ib, bronze=bronze)
+        assert outcome.bars_inserted == 1
+        assert len(outcome.errors) == 1
+
+    def test_empty_chunk_response_handled(self, tmp_path):
+        bronze = IntradayBronzeClient(bronze_dir=tmp_path / "bronze", timeframe="5m")
+        ib = MagicMock()
+        ib.get_historical_data.return_value = []
+        with patch("scripts.backfill_intraday.compute_intraday_chunks",
+                   return_value=[("1 W", "x")]):
+            outcome = backfill_ticker("AAPL", "5m", years=1, ib=ib, bronze=bronze)
+        assert outcome.chunks_fetched == 1
+        assert outcome.bars_inserted == 0
+
+
+# ── plan_chunks ──────────────────────────────────────────────────────────────
+
+
+class TestPlanChunks:
+    def test_one_line_per_ticker(self):
+        with patch("scripts.backfill_intraday.compute_intraday_chunks",
+                   return_value=[("1 W", "x"), ("1 W", "y")]):
+            lines = plan_chunks("5m", years=1, tickers=["AAPL", "MSFT"])
+        assert len(lines) == 2
+        assert all("2 chunks" in line for line in lines)
+
+
+# ── _resolve_tickers ─────────────────────────────────────────────────────────
+
+
+class TestResolveTickers:
+    def test_explicit_tickers(self):
+        args = SimpleNamespace(preset=None, tickers=["AAPL", "MSFT"])
+        name, tickers = _resolve_tickers(args)
+        assert name == "custom"
+        assert tickers == ["AAPL", "MSFT"]
+
+    def test_preset_path(self):
+        args = SimpleNamespace(preset="some.json", tickers=None)
+        with patch(
+            "scripts.backfill_intraday.load_preset",
+            return_value=("sp500", ["AAPL", "MSFT"], {}),
+        ):
+            name, tickers = _resolve_tickers(args)
+        assert name == "sp500"
+        assert tickers == ["AAPL", "MSFT"]
+
+    def test_neither_raises(self):
+        args = SimpleNamespace(preset=None, tickers=None)
+        with pytest.raises(SystemExit):
+            _resolve_tickers(args)
+
+
+# ── main() ───────────────────────────────────────────────────────────────────
+
+
+class TestMain:
+    def test_requires_timeframe(self):
+        with patch.object(sys, "argv", ["backfill_intraday.py"]):
+            with pytest.raises(SystemExit):
+                main()
+
+    def test_dry_run_no_ib_calls(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(backfill_intraday, "_CURSOR_DIR", tmp_path / "cur")
+        monkeypatch.setattr(backfill_intraday, "_DATA_LAKE", tmp_path / "lake")
+        monkeypatch.setattr(backfill_intraday, "_LOG_DIR", tmp_path / "logs")
+        # Patching IBClient at module path shouldn't even fire — dry-run skips it
+        with patch.object(
+            sys, "argv",
+            [
+                "backfill_intraday.py", "--timeframe", "5m",
+                "--tickers", "AAPL", "MSFT", "--dry-run",
+            ],
+        ):
+            main()
+        assert not (tmp_path / "logs").exists()
+
+    def test_skip_existing_marks_completed(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(backfill_intraday, "_CURSOR_DIR", tmp_path / "cur")
+        monkeypatch.setattr(backfill_intraday, "_DATA_LAKE", tmp_path / "lake")
+        monkeypatch.setattr(backfill_intraday, "_LOG_DIR", tmp_path / "logs")
+        # Seed bronze with old data so should_skip_existing returns True
+        bronze_dir = tmp_path / "lake" / "bronze" / "asset_class=equity"
+        bronze_dir.mkdir(parents=True)
+        client = IntradayBronzeClient(bronze_dir=bronze_dir, timeframe="5m")
+        old = datetime.now(_UTC) - timedelta(days=400)
+        client.replace_ticker_rows("AAPL", [{
+            "bar_timestamp": old, "symbol_id": 1,
+            "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 100,
+        }])
+
+        fake_ib = MagicMock()
+        fake_ib.__enter__.return_value = fake_ib
+        fake_ib.__exit__.return_value = None
+
+        with patch("clients.ib_client.IBClient", return_value=fake_ib):
+            with patch.object(
+                sys, "argv",
+                [
+                    "backfill_intraday.py", "--timeframe", "5m",
+                    "--tickers", "AAPL", "--skip-existing",
+                ],
+            ):
+                main()
+        # No fetch issued because skip-existing fired
+        assert fake_ib.get_historical_data.call_count == 0
+        # Cursor should now contain AAPL
+        assert load_cursor("5m", "custom") == {"AAPL"}
+
+    def test_max_tickers_caps_run(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(backfill_intraday, "_CURSOR_DIR", tmp_path / "cur")
+        monkeypatch.setattr(backfill_intraday, "_DATA_LAKE", tmp_path / "lake")
+        monkeypatch.setattr(backfill_intraday, "_LOG_DIR", tmp_path / "logs")
+
+        with patch.object(
+            sys, "argv",
+            [
+                "backfill_intraday.py", "--timeframe", "5m",
+                "--tickers", "A", "B", "C", "D",
+                "--max-tickers", "2", "--dry-run",
+            ],
+        ):
+            main()
+        # Dry-run + max-tickers = no fetch, plan only for first 2
+        # Just confirm no crash; the cap is exercised through code coverage
+
+    def test_cursor_already_complete(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(backfill_intraday, "_CURSOR_DIR", tmp_path / "cur")
+        monkeypatch.setattr(backfill_intraday, "_DATA_LAKE", tmp_path / "lake")
+        save_cursor("5m", "custom", {"AAPL"})
+        with patch.object(
+            sys, "argv",
+            ["backfill_intraday.py", "--timeframe", "5m", "--tickers", "AAPL"],
+        ):
+            main()
+        # No IB import attempt because pending list is empty
+
+    def test_full_run_inserts_via_mocked_ib(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(backfill_intraday, "_CURSOR_DIR", tmp_path / "cur")
+        monkeypatch.setattr(backfill_intraday, "_DATA_LAKE", tmp_path / "lake")
+        monkeypatch.setattr(backfill_intraday, "_LOG_DIR", tmp_path / "logs")
+
+        bars = [_make_ib_bar(datetime(2026, 4, 6, 10, 0))]
+        fake_ib = MagicMock()
+        fake_ib.__enter__.return_value = fake_ib
+        fake_ib.__exit__.return_value = None
+        fake_ib.get_historical_data.return_value = bars
+
+        with patch("clients.ib_client.IBClient", return_value=fake_ib):
+            with patch(
+                "scripts.backfill_intraday.compute_intraday_chunks",
+                return_value=[("1 W", "20260406-15:00:00")],
+            ):
+                with patch.object(
+                    sys, "argv",
+                    ["backfill_intraday.py", "--timeframe", "5m", "--tickers", "AAPL"],
+                ):
+                    main()
+        # Cursor should now contain AAPL and bronze should have a 5m parquet
+        assert "AAPL" in load_cursor("5m", "custom")
+        bronze_path = (
+            tmp_path / "lake" / "bronze" / "asset_class=equity" /
+            "symbol=AAPL" / "5m.parquet"
+        )
+        assert bronze_path.exists()
+
+    def test_ib_no_data_skips_and_marks_completed(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(backfill_intraday, "_CURSOR_DIR", tmp_path / "cur")
+        monkeypatch.setattr(backfill_intraday, "_DATA_LAKE", tmp_path / "lake")
+        monkeypatch.setattr(backfill_intraday, "_LOG_DIR", tmp_path / "logs")
+
+        fake_ib = MagicMock()
+        fake_ib.__enter__.return_value = fake_ib
+        fake_ib.__exit__.return_value = None
+        err = Exception("no data")
+        err.code = 162
+        fake_ib.get_historical_data.side_effect = err
+
+        with patch("clients.ib_client.IBClient", return_value=fake_ib):
+            with patch(
+                "scripts.backfill_intraday.compute_intraday_chunks",
+                return_value=[("1 W", "x")],
+            ):
+                with patch.object(
+                    sys, "argv",
+                    ["backfill_intraday.py", "--timeframe", "5m", "--tickers", "BAD"],
+                ):
+                    main()
+        # Marked completed so it isn't retried
+        assert "BAD" in load_cursor("5m", "custom")

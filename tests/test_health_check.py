@@ -911,10 +911,11 @@ class TestRepairIntradayWindow:
             )
             assert rc == 0
             cmd = mock_run.call_args[0][0]
-            assert "fetch_ib_historical.py" in cmd[1]
+            assert "backfill_intraday.py" in cmd[1]
             assert "--tickers" in cmd and "AAPL" in cmd
             assert "--timeframe" in cmd and "5m" in cmd
-            assert "--start" in cmd and "2026-04-01" in cmd
+            # repair_intraday_window converts --since to --years
+            assert "--years" in cmd
 
     def test_propagates_nonzero_returncode(self):
         with patch("scripts.health_check.subprocess.run") as mock_run:

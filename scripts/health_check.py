@@ -297,21 +297,26 @@ def repair_intraday_window(
     host: str,
     port: int,
 ) -> int:
-    """Shell out to fetch_ib_historical.py to repair a single symbol/timeframe window.
+    """Shell out to backfill_intraday.py to repair a single symbol/timeframe.
 
-    Returns the subprocess exit code. The narrow scope (one symbol, one
-    timeframe, explicit since-date) is enforced by the caller in main().
+    The narrow scope (one symbol, one timeframe) is enforced by the caller
+    in main(). The ``since`` argument is converted to a ``--years`` window
+    rounded up to whole years, since the chunking helper works in year-back
+    increments.
     """
+    today = date.today()
+    days = max((today - since).days, 1)
+    years = max(1, (days + 364) // 365)
     cmd = [
         sys.executable,
-        str(_SCRIPT_DIR / "fetch_ib_historical.py"),
+        str(_SCRIPT_DIR / "backfill_intraday.py"),
         "--tickers", symbol,
         "--timeframe", timeframe,
-        "--start", since.isoformat(),
+        "--years", str(years),
         "--host", host,
         "--port", str(port),
     ]
-    console.print(f"[cyan]Repairing {symbol} {timeframe} since {since}[/cyan]")
+    console.print(f"[cyan]Repairing {symbol} {timeframe} since {since} ({years}y)[/cyan]")
     result = subprocess.run(cmd, check=False)
     return result.returncode
 
