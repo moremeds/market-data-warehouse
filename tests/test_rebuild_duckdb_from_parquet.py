@@ -232,3 +232,98 @@ class TestRebuildDuckDBFromParquet:
             rows = db.query("SELECT * FROM md.futures_daily")
             assert len(rows) == 1
             assert rows[0]["root_symbol"] == "ES"
+
+
+class TestRebuildTimeframe1d:
+    @pytest.mark.integration
+    def test_timeframe_1d_rebuilds_daily_table(self, tmp_path, monkeypatch):
+        data_lake = tmp_path / "data-lake"
+        eq_bronze = data_lake / "bronze" / "asset_class=equity"
+        db_path = tmp_path / "rebuilt.duckdb"
+
+        with BronzeClient(bronze_dir=eq_bronze) as bronze:
+            aapl_id = bronze.get_symbol_id("AAPL")
+            bronze.replace_ticker_rows("AAPL", [_row("2025-01-02", aapl_id, 150.0)])
+
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "rebuild_duckdb_from_parquet.py",
+                "--timeframe", "1d",
+                "--db-path", str(db_path),
+            ],
+        )
+
+        with patch("scripts.rebuild_duckdb_from_parquet.DATA_LAKE", data_lake):
+            main()
+
+        with DBClient(db_path=db_path) as db:
+            assert db.get_latest_dates() == {"AAPL": "2025-01-02"}
+
+
+class TestRebuildIntraday:
+    @pytest.mark.integration
+    def test_timeframe_5m_rebuilds_5m_table(self, tmp_path, monkeypatch):
+        from datetime import datetime, timezone
+        from clients.intraday_bronze_client import IntradayBronzeClient
+
+        data_lake = tmp_path / "data-lake"
+        bronze = data_lake / "bronze" / "asset_class=equity"
+        db_path = tmp_path / "rebuilt.duckdb"
+        bronze.mkdir(parents=True)
+
+        client = IntradayBronzeClient(bronze_dir=bronze, timeframe="5m")
+        client.replace_ticker_rows("AAPL", [
+            {"bar_timestamp": datetime(2026, 4, 6, 13, 30, tzinfo=timezone.utc),
+             "symbol_id": 1, "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 100},
+        ])
+        client.close()
+
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "rebuild_duckdb_from_parquet.py",
+                "--timeframe", "5m",
+                "--db-path", str(db_path),
+            ],
+        )
+
+        with patch("scripts.rebuild_duckdb_from_parquet.DATA_LAKE", data_lake):
+            main()
+
+        with DBClient(db_path=db_path) as db:
+            result = db._conn.execute("SELECT count(*) FROM md.equities_5m").fetchone()
+            assert result[0] == 1
+
+    @pytest.mark.integration
+    def test_timeframe_1h_rebuilds_1h_table(self, tmp_path, monkeypatch):
+        from datetime import datetime, timezone
+        from clients.intraday_bronze_client import IntradayBronzeClient
+
+        data_lake = tmp_path / "data-lake"
+        bronze = data_lake / "bronze" / "asset_class=equity"
+        db_path = tmp_path / "rebuilt.duckdb"
+        bronze.mkdir(parents=True)
+
+        client = IntradayBronzeClient(bronze_dir=bronze, timeframe="1h")
+        client.replace_ticker_rows("MSFT", [
+            {"bar_timestamp": datetime(2026, 4, 6, 14, 30, tzinfo=timezone.utc),
+             "symbol_id": 2, "open": 100.0, "high": 102.0, "low": 99.5, "close": 101.5, "volume": 5000},
+        ])
+        client.close()
+
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "rebuild_duckdb_from_parquet.py",
+                "--timeframe", "1h",
+                "--db-path", str(db_path),
+            ],
+        )
+
+        with patch("scripts.rebuild_duckdb_from_parquet.DATA_LAKE", data_lake):
+            main()
+
+        with DBClient(db_path=db_path) as db:
+            result = db._conn.execute("SELECT count(*) FROM md.equities_1h").fetchone()
+            assert result[0] == 1

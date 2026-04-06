@@ -609,3 +609,82 @@ class TestFuturesDaily:
 
         with pytest.raises(Exception):
             db.replace_futures_from_parquet(tmp_path / "bronze")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# replace_equities_intraday_from_parquet
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestReplaceEquitiesIntradayFromParquet:
+    @pytest.mark.integration
+    def test_creates_intraday_5m_table_and_loads_data(self, db, tmp_path):
+        from datetime import datetime, timezone
+        from clients.intraday_bronze_client import IntradayBronzeClient
+
+        bronze = tmp_path / "bronze"
+        client = IntradayBronzeClient(bronze_dir=bronze, timeframe="5m")
+        client.replace_ticker_rows("AAPL", [
+            {
+                "bar_timestamp": datetime(2026, 4, 6, 13, 30, tzinfo=timezone.utc),
+                "symbol_id": 1,
+                "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 100,
+            },
+            {
+                "bar_timestamp": datetime(2026, 4, 6, 13, 35, tzinfo=timezone.utc),
+                "symbol_id": 1,
+                "open": 1.5, "high": 2.5, "low": 1.0, "close": 2.0, "volume": 200,
+            },
+        ])
+        client.close()
+
+        result = db.replace_equities_intraday_from_parquet(bronze, timeframe="5m")
+        assert result["rows"] == 2
+
+        rows = db._conn.execute(
+            "SELECT symbol_id, close FROM md.equities_5m ORDER BY bar_timestamp"
+        ).fetchall()
+        assert len(rows) == 2
+        assert rows[0][1] == 1.5  # close
+
+    @pytest.mark.integration
+    def test_creates_intraday_1h_table_and_loads_data(self, db, tmp_path):
+        from datetime import datetime, timezone
+        from clients.intraday_bronze_client import IntradayBronzeClient
+
+        bronze = tmp_path / "bronze"
+        client = IntradayBronzeClient(bronze_dir=bronze, timeframe="1h")
+        client.replace_ticker_rows("MSFT", [
+            {
+                "bar_timestamp": datetime(2026, 4, 6, 14, 30, tzinfo=timezone.utc),
+                "symbol_id": 2,
+                "open": 100.0, "high": 102.0, "low": 99.5, "close": 101.5, "volume": 5000,
+            },
+        ])
+        client.close()
+
+        result = db.replace_equities_intraday_from_parquet(bronze, timeframe="1h")
+        assert result["rows"] == 1
+        rows = db._conn.execute("SELECT close FROM md.equities_1h").fetchall()
+        assert rows[0][0] == 101.5
+
+    def test_invalid_timeframe_raises(self, db, tmp_path):
+        with pytest.raises(ValueError, match="unsupported"):
+            db.replace_equities_intraday_from_parquet(tmp_path, timeframe="3m")
+
+    @pytest.mark.integration
+    def test_empty_bronze_dir_returns_zero_rows(self, db, tmp_path):
+        bronze = tmp_path / "empty_bronze"
+        bronze.mkdir()
+        result = db.replace_equities_intraday_from_parquet(bronze, timeframe="5m")
+        assert result["rows"] == 0
+
+    @pytest.mark.integration
+    def test_rollback_on_error(self, db, tmp_path):
+        bronze = tmp_path / "bronze"
+        ticker_dir = bronze / "symbol=AAPL"
+        ticker_dir.mkdir(parents=True)
+        (ticker_dir / "5m.parquet").write_text("not parquet")
+
+        with pytest.raises(Exception):
+            db.replace_equities_intraday_from_parquet(bronze, timeframe="5m")

@@ -87,6 +87,24 @@ class DBClient:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_futures_daily_dedup "
             "ON md.futures_daily (trade_date, contract_id)"
         )
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS md.equities_1h (
+                bar_timestamp TIMESTAMPTZ,
+                symbol_id BIGINT,
+                open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE,
+                volume BIGINT,
+                UNIQUE (bar_timestamp, symbol_id)
+            )
+        """)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS md.equities_5m (
+                bar_timestamp TIMESTAMPTZ,
+                symbol_id BIGINT,
+                open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE,
+                volume BIGINT,
+                UNIQUE (bar_timestamp, symbol_id)
+            )
+        """)
 
     def close(self) -> None:
         self._conn.close()
@@ -417,4 +435,38 @@ class DBClient:
         counts = self._conn.execute(
             "SELECT count(*) FROM md.futures_daily"
         ).fetchone()
+        return {"rows": counts[0]}
+
+    def replace_equities_intraday_from_parquet(
+        self,
+        bronze_dir: str | Path,
+        timeframe: str,
+    ) -> dict[str, int]:
+        """Rebuild ``md.equities_{timeframe}`` from intraday bronze parquet."""
+        if timeframe not in ("1h", "5m"):
+            raise ValueError(f"unsupported intraday timeframe: {timeframe!r}")
+
+        table_name = f"equities_{timeframe}"
+        bronze_dir = Path(bronze_dir)
+        parquet_filename = f"{timeframe}.parquet"
+        parquet_files = list(bronze_dir.glob(f"symbol=*/{parquet_filename}"))
+        parquet_glob = str(bronze_dir / f"symbol=*/{parquet_filename}").replace("'", "''")
+
+        self._conn.execute("BEGIN")
+        try:
+            self._conn.execute(f"DROP TABLE IF EXISTS md.{table_name}")
+            self._ensure_schema()
+            if parquet_files:
+                self._conn.execute(f"""
+                    INSERT INTO md.{table_name}
+                        (bar_timestamp, symbol_id, open, high, low, close, volume)
+                    SELECT bar_timestamp, symbol_id, open, high, low, close, volume
+                    FROM read_parquet('{parquet_glob}', hive_partitioning=true)
+                """)
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+
+        counts = self._conn.execute(f"SELECT count(*) FROM md.{table_name}").fetchone()
         return {"rows": counts[0]}
