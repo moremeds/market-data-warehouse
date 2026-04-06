@@ -672,9 +672,23 @@ Symbols with >2 consecutive days of missing bars at any timeframe:
 
 The weekly summary is **report-only** — it does not auto-repair. Operator reviews and decides whether to investigate.
 
-#### Email integration
+#### Auto-recovery + email integration
 
-If the daily coverage drops below 95% for any timeframe, send an email alert via the existing Nodemailer CLI. Threshold configurable via `MDW_COVERAGE_ALERT_THRESHOLD` env var (default `0.95`).
+If the daily coverage drops below 95% for any timeframe, the coverage check:
+
+1. **Auto-triggers a targeted backfill** for the missing symbols at that timeframe via `fetch_ib_historical.py --tickers <missing> --timeframe <tf>` (subprocess, same pattern as the screener-triggered backfill)
+2. **Re-checks coverage** after the backfill completes
+3. **Sends an email alert** with:
+   - Which timeframe dropped below threshold
+   - List of missing symbols (before backfill)
+   - Backfill outcome (recovered N/M, still missing the rest)
+   - Cerebras-generated summary if `CEREBRAS_API_KEY` is set (reuses existing alert path)
+
+If the backfill fully recovers coverage, the alert is downgraded to an INFO log instead of an email — no false-positive email storms.
+
+Threshold configurable via `MDW_COVERAGE_ALERT_THRESHOLD` env var (default `0.95`).
+
+**Safety cap:** if more than 100 symbols are missing for any single timeframe, abort the auto-recovery and send the alert immediately. This prevents a runaway IB rate-limit hit if the daily update completely failed for some reason — operator should investigate manually.
 
 ### What's deliberately NOT in this spec (deferred)
 
@@ -691,6 +705,9 @@ If the daily coverage drops below 95% for any timeframe, send an email alert via
 | Coverage report | Mock bronze with known gaps, verify report counts and missing-symbol list |
 | Weekly summary | Mock 7 daily logs, verify markdown output, churn detection |
 | Threshold alert | Coverage below threshold triggers `_send_alert` once |
+| Auto-recovery happy path | Mock missing symbols, mock subprocess success, verify INFO log only (no email) |
+| Auto-recovery partial | Mock subprocess recovers some but not all, verify email lists remaining gaps |
+| Auto-recovery safety cap | >100 missing symbols → abort backfill, immediate email |
 
 ---
 
