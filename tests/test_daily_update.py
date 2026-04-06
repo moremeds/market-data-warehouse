@@ -1662,3 +1662,79 @@ class TestSessionCloseTime:
 
     def test_christmas_eve_2025_returns_1pm(self):
         assert session_close_time(date(2025, 12, 24)) == dtime(13, 0)
+
+
+# ── Task 5: validate_intraday_bar helper ──────────────────────────────
+
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+from scripts.daily_update import validate_intraday_bar
+
+
+_UTC = timezone.utc
+_ET = ZoneInfo("America/New_York")
+
+
+class TestValidateIntradayBar:
+    def _bar(self, ts):
+        from types import SimpleNamespace
+        return SimpleNamespace(bar_timestamp=ts, open=1.0, high=2.0, low=0.5, close=1.5, volume=100)
+
+    def test_valid_5m_bar_at_open(self):
+        # 9:30 ET on a Tuesday (April 7, 2026)
+        ts = datetime(2026, 4, 7, 9, 30, tzinfo=_ET).astimezone(_UTC)
+        issues = validate_intraday_bar(self._bar(ts), "AAPL", "5m")
+        assert issues == []
+
+    def test_valid_1h_bar_at_open(self):
+        ts = datetime(2026, 4, 7, 9, 30, tzinfo=_ET).astimezone(_UTC)
+        issues = validate_intraday_bar(self._bar(ts), "AAPL", "1h")
+        assert issues == []
+
+    def test_naive_timestamp_rejected(self):
+        ts = datetime(2026, 4, 7, 13, 30)  # naive
+        issues = validate_intraday_bar(self._bar(ts), "AAPL", "5m")
+        assert any("tz-aware" in i for i in issues)
+
+    def test_non_utc_offset_rejected(self):
+        # tz-aware but not UTC
+        ts = datetime(2026, 4, 7, 9, 30, tzinfo=_ET)
+        issues = validate_intraday_bar(self._bar(ts), "AAPL", "5m")
+        assert any("UTC" in i for i in issues)
+
+    def test_non_trading_day_rejected(self):
+        # Saturday April 4, 2026
+        ts = datetime(2026, 4, 4, 13, 30, tzinfo=_UTC)
+        issues = validate_intraday_bar(self._bar(ts), "AAPL", "5m")
+        assert any("not a trading day" in i for i in issues)
+
+    def test_outside_rth_rejected(self):
+        # 8:00 ET on a trading day (pre-market)
+        ts = datetime(2026, 4, 7, 8, 0, tzinfo=_ET).astimezone(_UTC)
+        issues = validate_intraday_bar(self._bar(ts), "AAPL", "5m")
+        assert any("outside RTH" in i for i in issues)
+
+    def test_after_close_rejected(self):
+        # 16:30 ET on a trading day (after close)
+        ts = datetime(2026, 4, 7, 16, 30, tzinfo=_ET).astimezone(_UTC)
+        issues = validate_intraday_bar(self._bar(ts), "AAPL", "5m")
+        assert any("outside RTH" in i for i in issues)
+
+    def test_5m_grid_misalignment_rejected(self):
+        # 9:32 ET — not on the 5-min grid
+        ts = datetime(2026, 4, 7, 9, 32, tzinfo=_ET).astimezone(_UTC)
+        issues = validate_intraday_bar(self._bar(ts), "AAPL", "5m")
+        assert any("5-min grid" in i for i in issues)
+
+    def test_1h_grid_misalignment_rejected(self):
+        # 10:00 ET — 1h bars start on :30
+        ts = datetime(2026, 4, 7, 10, 0, tzinfo=_ET).astimezone(_UTC)
+        issues = validate_intraday_bar(self._bar(ts), "AAPL", "1h")
+        assert any("1h grid" in i for i in issues)
+
+    def test_non_datetime_bar_timestamp_rejected(self):
+        from types import SimpleNamespace
+        bar = SimpleNamespace(bar_timestamp="not a datetime", open=1.0, high=2.0, low=0.5, close=1.5, volume=100)
+        issues = validate_intraday_bar(bar, "AAPL", "5m")
+        assert any("must be datetime" in i for i in issues)

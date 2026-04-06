@@ -428,6 +428,54 @@ def bars_to_futures_rows(
     return rows
 
 
+def validate_intraday_bar(bar: object, ticker: str, timeframe: str) -> list[str]:
+    """Validate an intraday bar's timestamp against UTC, RTH, and grid alignment.
+
+    Returns list of issue strings; empty if valid. Caller is responsible for
+    OHLCV relationship checks (use ``validate_bars`` for those).
+    """
+    from zoneinfo import ZoneInfo
+
+    issues: list[str] = []
+
+    ts = getattr(bar, "bar_timestamp", None)
+    if not isinstance(ts, datetime):
+        issues.append(f"{ticker}: bar_timestamp must be datetime, got {type(ts).__name__}")
+        return issues
+
+    # 1. tz-aware UTC
+    if ts.tzinfo is None or ts.tzinfo.utcoffset(ts) is None:
+        issues.append(f"{ticker} {ts}: bar_timestamp must be tz-aware")
+        return issues
+    if ts.utcoffset() != timedelta(0):
+        issues.append(f"{ticker} {ts}: bar_timestamp must be UTC offset 0")
+        return issues
+
+    # 2. Convert to ET for date and session-window checks
+    et = ts.astimezone(ZoneInfo("America/New_York"))
+
+    # 3. Trading day
+    if not is_trading_day(et.date()):
+        issues.append(f"{ticker} {ts}: not a trading day")
+
+    # 4. Within RTH
+    rth_start = et.replace(hour=9, minute=30, second=0, microsecond=0)
+    close_t = session_close_time(et.date())
+    rth_end = et.replace(hour=close_t.hour, minute=close_t.minute, second=0, microsecond=0)
+    if not (rth_start <= et < rth_end):
+        issues.append(f"{ticker} {ts}: outside RTH ({et.time()} ET)")
+
+    # 5. Grid alignment
+    if timeframe == "5m":
+        if et.minute % 5 != 0 or et.second != 0:
+            issues.append(f"{ticker} {ts}: not aligned to 5-min grid")
+    elif timeframe == "1h":
+        if et.minute != 30 or et.second != 0:
+            issues.append(f"{ticker} {ts}: not aligned to 1h grid (expected :30 ET)")
+
+    return issues
+
+
 def fetch_fallback_bars(
     ticker: str,
     missing_dates: list[date],
