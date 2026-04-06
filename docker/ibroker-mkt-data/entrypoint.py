@@ -67,6 +67,14 @@ def run_daily_update(force: bool = False) -> int:
     return _run_cmd(cmd, "Daily update")
 
 
+def run_intraday_update(force: bool = False) -> int:
+    """Run the intraday update (1h + 5m bars)."""
+    cmd = [_python(), str(SCRIPTS_DIR / "intraday_update.py")]
+    if force:
+        cmd.append("--force")
+    return _run_cmd(cmd, "Intraday update")
+
+
 def run_seed(preset: str, years: int = 10, skip_existing: bool = True) -> int:
     """Run initial backfill from a preset."""
     cmd = [
@@ -122,7 +130,7 @@ def run_rebuild(preset: str, years: int = 10) -> int:
 
 
 def run_job_cycle(force: bool = False) -> int:
-    """Full job cycle: download from R2 → daily update → upload to R2."""
+    """Full job cycle: download from R2 → daily update → intraday update → upload."""
     logger.info("=== Starting job cycle ===")
 
     # Step 1: Rehydrate local bronze from R2
@@ -133,14 +141,18 @@ def run_job_cycle(force: bool = False) -> int:
     # Step 2: Run daily update (equity + futures + CBOE)
     rc = run_daily_update(force=force)
 
-    # Step 3: Upload to R2 only on success
+    # Step 3: Run intraday update (only if daily succeeded)
+    if rc == 0:
+        rc = run_intraday_update(force=force)
+
+    # Step 4: Upload to R2 only on success
     if rc == 0:
         upload_rc = sync_upload()
         if upload_rc != 0:
             logger.error("R2 upload failed (rc=%d)", upload_rc)
             return upload_rc
     else:
-        logger.warning("Daily update failed (rc=%d), skipping R2 upload", rc)
+        logger.warning("Update failed (rc=%d), skipping R2 upload", rc)
 
     logger.info("=== Job cycle complete (rc=%d) ===", rc)
     return rc
