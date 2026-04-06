@@ -470,8 +470,11 @@ def validate_intraday_bar(bar: object, ticker: str, timeframe: str) -> list[str]
         if et.minute % 5 != 0 or et.second != 0:
             issues.append(f"{ticker} {ts}: not aligned to 5-min grid")
     elif timeframe == "1h":
-        if et.minute != 30 or et.second != 0:
-            issues.append(f"{ticker} {ts}: not aligned to 1h grid (expected :30 ET)")
+        # IB returns 1h US-equity RTH bars at 9:30 (the opening 30-min bar)
+        # then on the hour (10:00, 11:00, ..., 15:00). Empirically verified
+        # against IB Gateway via scripts/probe_ib_intraday.py.
+        if et.second != 0 or (et.minute != 30 and et.minute != 0):
+            issues.append(f"{ticker} {ts}: not aligned to 1h grid (expected :30 or :00 ET)")
 
     return issues
 

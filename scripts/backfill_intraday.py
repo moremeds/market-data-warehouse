@@ -27,6 +27,10 @@ from pathlib import Path
 from typing import Any, Sequence
 from zoneinfo import ZoneInfo
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:  # pragma: no cover
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from rich.console import Console
 
 from clients.intraday_bronze_client import (
@@ -240,7 +244,12 @@ def main() -> None:
 
     years = args.years if args.years is not None else _DEFAULT_YEARS[args.timeframe]
     cursor_name, tickers = _resolve_tickers(args)
-    completed = load_cursor(args.timeframe, cursor_name)
+
+    # Cursor is only meaningful for preset runs (resumable bulk backfills).
+    # When --tickers is passed explicitly, the operator knows what they want;
+    # always refetch and skip cursor bookkeeping.
+    use_cursor = bool(args.preset)
+    completed: set[str] = load_cursor(args.timeframe, cursor_name) if use_cursor else set()
 
     pending = [t for t in tickers if t not in completed]
     if args.max_tickers is not None:
@@ -248,7 +257,8 @@ def main() -> None:
 
     console.print(
         f"\n[bold]Backfill intraday[/bold]  tf={args.timeframe}  years={years}  "
-        f"tickers={len(tickers)}  pending={len(pending)}  cursor={cursor_name}"
+        f"tickers={len(tickers)}  pending={len(pending)}  "
+        f"cursor={cursor_name if use_cursor else 'disabled'}"
     )
 
     if args.dry_run:
@@ -277,21 +287,23 @@ def main() -> None:
     total_rejected = 0
     skipped: list[str] = []
 
-    with IBClient(host=args.host, port=args.port) as ib:
-        ib.connect()
+    with IBClient() as ib:
+        ib.connect(host=args.host, port=args.port)
         for ticker in pending:
             if args.skip_existing and should_skip_existing(bronze, ticker, years):
                 console.print(f"  [dim]{ticker}: bronze already covers {years}y — skip[/dim]")
-                completed.add(ticker)
-                save_cursor(args.timeframe, cursor_name, completed)
+                if use_cursor:
+                    completed.add(ticker)
+                    save_cursor(args.timeframe, cursor_name, completed)
                 continue
 
             outcome = backfill_ticker(ticker, args.timeframe, years, ib, bronze)
             if outcome.skipped_reason:
                 console.print(f"  [yellow]{ticker}: {outcome.skipped_reason}[/yellow]")
                 skipped.append(ticker)
-                completed.add(ticker)  # don't retry "no data" tickers
-                save_cursor(args.timeframe, cursor_name, completed)
+                if use_cursor:
+                    completed.add(ticker)  # don't retry "no data" tickers
+                    save_cursor(args.timeframe, cursor_name, completed)
                 continue
 
             total_inserted += outcome.bars_inserted
@@ -305,8 +317,9 @@ def main() -> None:
                 f"  [green]{ticker}[/green]: +{outcome.bars_inserted} bars "
                 f"({outcome.rejected} rejected)"
             )
-            completed.add(ticker)
-            save_cursor(args.timeframe, cursor_name, completed)
+            if use_cursor:
+                completed.add(ticker)
+                save_cursor(args.timeframe, cursor_name, completed)
 
     elapsed = time.monotonic() - t0
     console.print(

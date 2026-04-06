@@ -287,8 +287,8 @@ class TestMain:
                 main()
         # No fetch issued because skip-existing fired
         assert fake_ib.get_historical_data.call_count == 0
-        # Cursor should now contain AAPL
-        assert load_cursor("5m", "custom") == {"AAPL"}
+        # --tickers runs do NOT touch the cursor (cursor is for preset resume)
+        assert load_cursor("5m", "custom") == set()
 
     def test_max_tickers_caps_run(self, tmp_path, monkeypatch):
         monkeypatch.setattr(backfill_intraday, "_CURSOR_DIR", tmp_path / "cur")
@@ -307,16 +307,143 @@ class TestMain:
         # Dry-run + max-tickers = no fetch, plan only for first 2
         # Just confirm no crash; the cap is exercised through code coverage
 
-    def test_cursor_already_complete(self, tmp_path, monkeypatch, capsys):
+    def test_explicit_tickers_bypass_cursor(self, tmp_path, monkeypatch):
+        # A "completed" cursor entry must NOT block a --tickers explicit run.
+        # The cursor is for preset resume only.
         monkeypatch.setattr(backfill_intraday, "_CURSOR_DIR", tmp_path / "cur")
         monkeypatch.setattr(backfill_intraday, "_DATA_LAKE", tmp_path / "lake")
+        monkeypatch.setattr(backfill_intraday, "_LOG_DIR", tmp_path / "logs")
         save_cursor("5m", "custom", {"AAPL"})
-        with patch.object(
-            sys, "argv",
-            ["backfill_intraday.py", "--timeframe", "5m", "--tickers", "AAPL"],
-        ):
-            main()
-        # No IB import attempt because pending list is empty
+
+        bars = [_make_ib_bar(datetime(2026, 4, 6, 10, 0))]
+        fake_ib = MagicMock()
+        fake_ib.__enter__.return_value = fake_ib
+        fake_ib.__exit__.return_value = None
+        fake_ib.get_historical_data.return_value = bars
+
+        with patch("clients.ib_client.IBClient", return_value=fake_ib):
+            with patch(
+                "scripts.backfill_intraday.compute_intraday_chunks",
+                return_value=[("1 W", "x")],
+            ):
+                with patch.object(
+                    sys, "argv",
+                    ["backfill_intraday.py", "--timeframe", "5m", "--tickers", "AAPL"],
+                ):
+                    main()
+        # IB was called even though AAPL was in the cursor
+        assert fake_ib.get_historical_data.call_count == 1
+
+    def test_preset_run_writes_cursor_on_success(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(backfill_intraday, "_CURSOR_DIR", tmp_path / "cur")
+        monkeypatch.setattr(backfill_intraday, "_DATA_LAKE", tmp_path / "lake")
+        monkeypatch.setattr(backfill_intraday, "_LOG_DIR", tmp_path / "logs")
+
+        bars = [_make_ib_bar(datetime(2026, 4, 6, 10, 0))]
+        fake_ib = MagicMock()
+        fake_ib.__enter__.return_value = fake_ib
+        fake_ib.__exit__.return_value = None
+        fake_ib.get_historical_data.return_value = bars
+
+        with patch("clients.ib_client.IBClient", return_value=fake_ib):
+            with patch(
+                "scripts.backfill_intraday.load_preset",
+                return_value=("sp500", ["AAPL"], {}),
+            ):
+                with patch(
+                    "scripts.backfill_intraday.compute_intraday_chunks",
+                    return_value=[("1 W", "x")],
+                ):
+                    with patch.object(
+                        sys, "argv",
+                        ["backfill_intraday.py", "--timeframe", "5m", "--preset", "sp.json"],
+                    ):
+                        main()
+        assert load_cursor("5m", "sp500") == {"AAPL"}
+
+    def test_preset_run_writes_cursor_on_no_data(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(backfill_intraday, "_CURSOR_DIR", tmp_path / "cur")
+        monkeypatch.setattr(backfill_intraday, "_DATA_LAKE", tmp_path / "lake")
+        monkeypatch.setattr(backfill_intraday, "_LOG_DIR", tmp_path / "logs")
+
+        fake_ib = MagicMock()
+        fake_ib.__enter__.return_value = fake_ib
+        fake_ib.__exit__.return_value = None
+        err = Exception("no data")
+        err.code = 162
+        fake_ib.get_historical_data.side_effect = err
+
+        with patch("clients.ib_client.IBClient", return_value=fake_ib):
+            with patch(
+                "scripts.backfill_intraday.load_preset",
+                return_value=("sp500", ["BAD"], {}),
+            ):
+                with patch(
+                    "scripts.backfill_intraday.compute_intraday_chunks",
+                    return_value=[("1 W", "x")],
+                ):
+                    with patch.object(
+                        sys, "argv",
+                        ["backfill_intraday.py", "--timeframe", "5m", "--preset", "sp.json"],
+                    ):
+                        main()
+        assert load_cursor("5m", "sp500") == {"BAD"}
+
+    def test_preset_run_writes_cursor_on_skip_existing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(backfill_intraday, "_CURSOR_DIR", tmp_path / "cur")
+        monkeypatch.setattr(backfill_intraday, "_DATA_LAKE", tmp_path / "lake")
+        monkeypatch.setattr(backfill_intraday, "_LOG_DIR", tmp_path / "logs")
+        bronze_dir = tmp_path / "lake" / "bronze" / "asset_class=equity"
+        bronze_dir.mkdir(parents=True)
+        client = IntradayBronzeClient(bronze_dir=bronze_dir, timeframe="5m")
+        old = datetime.now(_UTC) - timedelta(days=400)
+        client.replace_ticker_rows("AAPL", [{
+            "bar_timestamp": old, "symbol_id": 1,
+            "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 100,
+        }])
+
+        fake_ib = MagicMock()
+        fake_ib.__enter__.return_value = fake_ib
+        fake_ib.__exit__.return_value = None
+
+        with patch("clients.ib_client.IBClient", return_value=fake_ib):
+            with patch(
+                "scripts.backfill_intraday.load_preset",
+                return_value=("sp500", ["AAPL"], {}),
+            ):
+                with patch.object(
+                    sys, "argv",
+                    [
+                        "backfill_intraday.py", "--timeframe", "5m",
+                        "--preset", "sp.json", "--skip-existing",
+                    ],
+                ):
+                    main()
+        assert load_cursor("5m", "sp500") == {"AAPL"}
+
+    def test_preset_run_respects_cursor(self, tmp_path, monkeypatch):
+        # Inverse: when --preset is used, cursor entries DO skip tickers.
+        monkeypatch.setattr(backfill_intraday, "_CURSOR_DIR", tmp_path / "cur")
+        monkeypatch.setattr(backfill_intraday, "_DATA_LAKE", tmp_path / "lake")
+        monkeypatch.setattr(backfill_intraday, "_LOG_DIR", tmp_path / "logs")
+        save_cursor("5m", "sp500", {"AAPL"})
+
+        fake_ib = MagicMock()
+        fake_ib.__enter__.return_value = fake_ib
+        fake_ib.__exit__.return_value = None
+
+        with patch("clients.ib_client.IBClient", return_value=fake_ib):
+            with patch(
+                "scripts.backfill_intraday.load_preset",
+                return_value=("sp500", ["AAPL"], {}),
+            ):
+                with patch.object(
+                    sys, "argv",
+                    ["backfill_intraday.py", "--timeframe", "5m", "--preset", "x.json"],
+                ):
+                    main()
+        # AAPL was in cursor → no IB call
+        assert fake_ib.get_historical_data.call_count == 0
 
     def test_full_run_inserts_via_mocked_ib(self, tmp_path, monkeypatch):
         monkeypatch.setattr(backfill_intraday, "_CURSOR_DIR", tmp_path / "cur")
@@ -339,8 +466,8 @@ class TestMain:
                     ["backfill_intraday.py", "--timeframe", "5m", "--tickers", "AAPL"],
                 ):
                     main()
-        # Cursor should now contain AAPL and bronze should have a 5m parquet
-        assert "AAPL" in load_cursor("5m", "custom")
+        # --tickers does not write the cursor; verify bronze parquet instead
+        assert load_cursor("5m", "custom") == set()
         bronze_path = (
             tmp_path / "lake" / "bronze" / "asset_class=equity" /
             "symbol=AAPL" / "5m.parquet"
@@ -369,5 +496,5 @@ class TestMain:
                     ["backfill_intraday.py", "--timeframe", "5m", "--tickers", "BAD"],
                 ):
                     main()
-        # Marked completed so it isn't retried
-        assert "BAD" in load_cursor("5m", "custom")
+        # --tickers run never writes cursor; the no-data skip is per-run only
+        assert load_cursor("5m", "custom") == set()

@@ -774,9 +774,13 @@ class TestGenerateExpectedIntradayTimestamps:
     def test_1h_full_day_count(self):
         d = date(2026, 4, 6)
         ts = generate_expected_intraday_timestamps([d], "1h")
-        # 9:30, 10:30, 11:30, 12:30, 13:30, 14:30 → last bar 14:30 covers 14:30-15:30
-        # 15:30 would extend past 16:00, so it's excluded → 6 bars
-        assert len(ts) == 6
+        # IB returns: 9:30 (partial open), 10:00, 11:00, 12:00, 13:00, 14:00, 15:00
+        # 15:00 covers 15:00-16:00 (last full bar). 7 bars per session.
+        assert len(ts) == 7
+        et_minutes = sorted(t.astimezone(_ET).strftime("%H:%M") for t in ts)
+        assert et_minutes == [
+            "09:30", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00",
+        ]
 
     def test_5m_early_close(self):
         # 2026-11-27 is Black Friday (early close at 13:00 ET)

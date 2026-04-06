@@ -11,6 +11,10 @@ from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:  # pragma: no cover
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from rich.console import Console
 
 from clients import BronzeClient
@@ -161,13 +165,16 @@ def generate_expected_intraday_timestamps(
 ) -> set[datetime]:
     """Return the set of expected RTH bar timestamps (UTC) for *trading_days*.
 
-    For each trading day, emit timestamps starting at 9:30 ET, stepping by the
-    bar size, up to but **not including** the session close (last bar's *start*
-    must be strictly before close so it covers a full bar interval).
+    For each trading day:
+
+    * **5m**: bars every 5 minutes from 9:30 ET up to ``close - 5min``.
+    * **1h**: first bar at 9:30 ET (covers 9:30-10:00), then on the hour
+      (10:00, 11:00, …) up to ``close - 1h``. This matches IB's actual
+      US-equity RTH 1h grid as verified empirically by
+      ``scripts/probe_ib_intraday.py``.
     """
     if timeframe not in _BAR_SIZE_MINUTES:
         raise ValueError(f"unsupported intraday timeframe: {timeframe!r}")
-    step = timedelta(minutes=_BAR_SIZE_MINUTES[timeframe])
 
     expected: set[datetime] = set()
     for d in trading_days:
@@ -176,14 +183,22 @@ def generate_expected_intraday_timestamps(
         rth_open = datetime.combine(d, time(9, 30), tzinfo=_ET)
         close_t = session_close_time(d)
         rth_close = datetime.combine(d, close_t, tzinfo=_ET)
+
         if timeframe == "1h":
-            # 1h grid is anchored to :30 ET
+            # First bar: 9:30 (partial 30-min open)
+            expected.add(rth_open.astimezone(timezone.utc))
+            # Subsequent bars on the hour, last bar's start strictly before close
+            current = datetime.combine(d, time(10, 0), tzinfo=_ET)
+            step = timedelta(hours=1)
+            while current + step <= rth_close:
+                expected.add(current.astimezone(timezone.utc))
+                current += step
+        else:  # 5m
             current = rth_open
-        else:
-            current = rth_open
-        while current + step <= rth_close:
-            expected.add(current.astimezone(timezone.utc))
-            current += step
+            step = timedelta(minutes=5)
+            while current + step <= rth_close:
+                expected.add(current.astimezone(timezone.utc))
+                current += step
     return expected
 
 

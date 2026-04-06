@@ -16,9 +16,14 @@ import argparse
 import logging
 import os
 import re
+import sys
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:  # pragma: no cover
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from rich.console import Console
 
