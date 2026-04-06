@@ -1618,3 +1618,47 @@ class TestMain:
             main()
 
         mock_ib.connect.assert_called_once_with(host="10.0.0.5", port=4002)
+
+
+# ── Task 4: NYSE early-close calendar helpers ──────────────────────────
+
+from datetime import time as dtime
+
+from scripts.daily_update import get_early_close_days, session_close_time
+
+
+class TestEarlyCloseDays:
+    def test_2025_includes_day_after_thanksgiving(self):
+        # Thanksgiving 2025 = Nov 27 (Thu); day after = Nov 28 (Fri)
+        result = get_early_close_days(2025)
+        assert date(2025, 11, 28) in result
+        assert result[date(2025, 11, 28)] == dtime(13, 0)
+
+    def test_2025_includes_christmas_eve(self):
+        # Dec 24, 2025 is a Wednesday (trading day) → early close
+        result = get_early_close_days(2025)
+        assert date(2025, 12, 24) in result
+        assert result[date(2025, 12, 24)] == dtime(13, 0)
+
+    def test_2026_includes_day_after_thanksgiving(self):
+        # Thanksgiving 2026 = Nov 26 (Thu); day after = Nov 27 (Fri)
+        result = get_early_close_days(2026)
+        assert date(2026, 11, 27) in result
+
+    def test_2024_july_3_early_close(self):
+        # July 4 2024 was a Thursday, July 3 (Wed) had an early close
+        result = get_early_close_days(2024)
+        assert date(2024, 7, 3) in result
+
+
+class TestSessionCloseTime:
+    def test_normal_day_returns_4pm(self):
+        # Random Wednesday with no early close
+        assert session_close_time(date(2026, 4, 8)) == dtime(16, 0)
+
+    def test_early_close_day_returns_1pm(self):
+        # Day after Thanksgiving 2025
+        assert session_close_time(date(2025, 11, 28)) == dtime(13, 0)
+
+    def test_christmas_eve_2025_returns_1pm(self):
+        assert session_close_time(date(2025, 12, 24)) == dtime(13, 0)

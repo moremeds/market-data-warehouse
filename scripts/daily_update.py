@@ -35,8 +35,7 @@ import json
 import logging
 import os
 import sys
-import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 from ib_async import Future, Index, Stock
@@ -190,6 +189,47 @@ def is_trading_day(d: date) -> bool:
     if d.weekday() >= 5:
         return False
     return d not in get_nyse_holidays(d.year)
+
+
+def get_early_close_days(year: int) -> dict[date, time]:
+    """Return ``{trading_date: close_time_ET}`` for half-day trading days.
+
+    Standard early-close days (NYSE close at 13:00 ET):
+      - Day after Thanksgiving (4th Thursday of November + 1 day)
+      - Christmas Eve (Dec 24, if a trading day)
+      - July 3 (if Independence Day on a weekday other than Mon/Sun)
+    """
+    early: dict[date, time] = {}
+
+    # Day after Thanksgiving — 4th Thursday of November + 1 day
+    nov1 = date(year, 11, 1)
+    first_thu = nov1 + timedelta(days=(3 - nov1.weekday()) % 7)
+    thanksgiving = first_thu + timedelta(weeks=3)
+    day_after = thanksgiving + timedelta(days=1)
+    if is_trading_day(day_after):
+        early[day_after] = time(13, 0)
+
+    # Christmas Eve — Dec 24, only if trading day
+    christmas_eve = date(year, 12, 24)
+    if is_trading_day(christmas_eve):
+        early[christmas_eve] = time(13, 0)
+
+    # July 3 — early close when Independence Day (Jul 4) is Tue/Wed/Thu/Fri
+    july_3 = date(year, 7, 3)
+    july_4 = date(year, 7, 4)
+    if is_trading_day(july_3) and july_4.weekday() in (1, 2, 3, 4):
+        early[july_3] = time(13, 0)
+
+    return early
+
+
+def session_close_time(d: date) -> time:
+    """Return the ET close time for trading day *d*.
+
+    16:00 normally; 13:00 on early-close days.
+    """
+    early = get_early_close_days(d.year)
+    return early.get(d, time(16, 0))
 
 
 def previous_trading_day(d: date) -> date:
