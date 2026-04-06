@@ -138,29 +138,59 @@ def _cursor_path(name: str) -> Path:
     return CURSOR_DIR / f"cursor_{name}.json"
 
 
-def load_cursor(name: str) -> set[str]:
-    """Load completed tickers from cursor file. Returns empty set if none."""
+def load_cursor(name: str) -> dict[str, list[str]]:
+    """Load completed-timeframes-per-ticker cursor.
+
+    Backward compatible: old format ``{"completed": ["AAPL", ...]}`` is migrated
+    to the new format treating each listed ticker as fully complete (all known
+    timeframes done).
+    """
     path = _cursor_path(name)
     if not path.exists():
-        return set()
+        return {}
     with path.open() as f:
         data = json.load(f)
-    return set(data.get("completed", []))
+    raw = data.get("completed")
+    if isinstance(raw, list):
+        # Legacy format — migrate
+        return {ticker: ["1d", "1h", "5m"] for ticker in raw}
+    if isinstance(raw, dict):
+        return {k: list(v) for k, v in raw.items()}
+    return {}
 
 
-def save_cursor(name: str, completed: set[str], started_at: str) -> None:
-    """Write cursor JSON atomically (write to tmp, then rename)."""
+def save_cursor(name: str, completed: dict[str, list[str]], started_at: str) -> None:
+    """Write per-timeframe cursor JSON atomically."""
     path = _cursor_path(name)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     payload = {
-        "completed": sorted(completed),
+        "completed": {k: sorted(set(v)) for k, v in completed.items()},
         "started_at": started_at,
         "updated_at": datetime.now().isoformat(),
     }
     with tmp.open("w") as f:
         json.dump(payload, f, indent=2)
     tmp.rename(path)
+
+
+def is_ticker_complete(
+    cursor: dict[str, list[str]],
+    ticker: str,
+    required: tuple[str, ...],
+) -> bool:
+    """Return True if all required timeframes are completed for *ticker*."""
+    done = set(cursor.get(ticker, []))
+    return all(tf in done for tf in required)
+
+
+def mark_timeframe_done(
+    cursor: dict[str, list[str]], ticker: str, timeframe: str
+) -> None:
+    """Add *timeframe* to a ticker's completed list (idempotent)."""
+    done = cursor.setdefault(ticker, [])
+    if timeframe not in done:
+        done.append(timeframe)
 
 
 def clear_cursor(name: str) -> None:
@@ -549,11 +579,12 @@ def main():
         console.print("[yellow]Cursor reset.[/yellow]")
 
     completed = load_cursor(effective_cursor)
-    remaining = [t for t in all_tickers if t not in completed]
+    remaining = [t for t in all_tickers if not is_ticker_complete(completed, t, ("1d",))]
 
+    n_completed = sum(1 for t in all_tickers if is_ticker_complete(completed, t, ("1d",)))
     console.print(
         f"\n[bold]{len(remaining)} of {len(all_tickers)} tickers remaining"
-        f" ({len(completed)} already completed via cursor)[/bold]"
+        f" ({n_completed} already completed via cursor)[/bold]"
     )
 
     if not remaining:
@@ -671,7 +702,7 @@ def _run_backfill(args, ib, bronze, all_tickers, remaining, completed,
                 count = backfill_ticker(ticker, bars, bronze, asset_class=asset_class)
 
                 if count > 0:
-                    completed.add(ticker)
+                    mark_timeframe_done(completed, ticker, "1d")
                     save_cursor(cursor_name, completed, started_at)
                     console.print(f"  [green]{ticker}[/green]: {count:,} backfill rows inserted")
                     batch_ok += 1
@@ -686,18 +717,20 @@ def _run_backfill(args, ib, bronze, all_tickers, remaining, completed,
         total_rows += batch_rows
         total_ok += batch_ok
         total_fail += batch_fail
+        n_done = sum(1 for t in all_tickers if is_ticker_complete(completed, t, ("1d",)))
         console.print(
             f"\n  [bold]Batch {batch_idx + 1} done:[/bold] "
             f"{batch_ok} ok, {batch_fail} failed, "
             f"{batch_rows:,} rows in {batch_elapsed:.1f}s  "
-            f"[dim]({len(completed)}/{len(all_tickers)} total completed)[/dim]"
+            f"[dim]({n_done}/{len(all_tickers)} total completed)[/dim]"
         )
 
+    n_done = sum(1 for t in all_tickers if is_ticker_complete(completed, t, ("1d",)))
     console.print(
         f"\n[bold]Backfill complete:[/bold] {total_ok} ok, {total_fail} failed, "
         f"{total_rows:,} rows"
     )
-    console.print(f"[bold]Cursor:[/bold] {len(completed)}/{len(all_tickers)} tickers saved")
+    console.print(f"[bold]Cursor:[/bold] {n_done}/{len(all_tickers)} tickers saved")
 
 
 def _run_normal(args, ib, bronze, all_tickers, remaining, completed,
@@ -708,7 +741,8 @@ def _run_normal(args, ib, bronze, all_tickers, remaining, completed,
         existing = get_existing_symbols(bronze)
         skipped = [t for t in remaining if t in existing]
         if skipped:
-            completed.update(skipped)
+            for t in skipped:
+                mark_timeframe_done(completed, t, "1d")
             save_cursor(cursor_name, completed, started_at)
             remaining = [t for t in remaining if t not in existing]
             console.print(
@@ -762,7 +796,7 @@ def _run_normal(args, ib, bronze, all_tickers, remaining, completed,
                 count = fetch_ticker(ticker, bars, bronze, asset_class=asset_class)
 
                 if count > 0:
-                    completed.add(ticker)
+                    mark_timeframe_done(completed, ticker, "1d")
                     save_cursor(cursor_name, completed, started_at)
                     console.print(f"  [green]{ticker}[/green]: {count:,} rows inserted")
                     batch_ok += 1
@@ -777,18 +811,20 @@ def _run_normal(args, ib, bronze, all_tickers, remaining, completed,
         total_rows += batch_rows
         total_ok += batch_ok
         total_fail += batch_fail
+        n_done = sum(1 for t in all_tickers if is_ticker_complete(completed, t, ("1d",)))
         console.print(
             f"\n  [bold]Batch {batch_idx + 1} done:[/bold] "
             f"{batch_ok} ok, {batch_fail} failed, "
             f"{batch_rows:,} rows in {batch_elapsed:.1f}s  "
-            f"[dim]({len(completed)}/{len(all_tickers)} total completed)[/dim]"
+            f"[dim]({n_done}/{len(all_tickers)} total completed)[/dim]"
         )
 
+    n_done = sum(1 for t in all_tickers if is_ticker_complete(completed, t, ("1d",)))
     console.print(
         f"\n[bold]Run complete:[/bold] {total_ok} ok, {total_fail} failed, "
         f"{total_rows:,} rows"
     )
-    console.print(f"[bold]Cursor:[/bold] {len(completed)}/{len(all_tickers)} tickers saved")
+    console.print(f"[bold]Cursor:[/bold] {n_done}/{len(all_tickers)} tickers saved")
 
 
 if __name__ == "__main__":

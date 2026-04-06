@@ -33,9 +33,11 @@ from scripts.fetch_ib_historical import (
     fetch_ticker_bars,
     get_existing_symbols,
     get_oldest_dates,
+    is_ticker_complete,
     load_cursor,
     load_preset,
     main,
+    mark_timeframe_done,
     save_cursor,
 )
 
@@ -231,19 +233,29 @@ class TestCursorPath:
 
 
 class TestLoadCursor:
-    def test_returns_empty_set_when_no_file(self, tmp_path):
+    def test_returns_empty_dict_when_no_file(self, tmp_path):
         with patch("scripts.fetch_ib_historical.CURSOR_DIR", tmp_path):
             result = load_cursor("nonexistent")
-        assert result == set()
+        assert result == {}
 
-    def test_loads_completed_tickers(self, tmp_path):
+    def test_loads_old_format_migrates_to_dict(self, tmp_path):
+        # Old format: completed is a list — migrated to all-timeframes-complete per ticker
         cursor_data = {"completed": ["AAPL", "MSFT"], "started_at": "2025-01-01T00:00:00"}
         cursor_file = tmp_path / "cursor_test.json"
         cursor_file.write_text(json.dumps(cursor_data))
 
         with patch("scripts.fetch_ib_historical.CURSOR_DIR", tmp_path):
             result = load_cursor("test")
-        assert result == {"AAPL", "MSFT"}
+        assert result == {"AAPL": ["1d", "1h", "5m"], "MSFT": ["1d", "1h", "5m"]}
+
+    def test_loads_new_dict_format(self, tmp_path):
+        cursor_data = {"completed": {"AAPL": ["1d", "1h"], "MSFT": ["1d"]}, "started_at": "2025-01-01T00:00:00"}
+        cursor_file = tmp_path / "cursor_test.json"
+        cursor_file.write_text(json.dumps(cursor_data))
+
+        with patch("scripts.fetch_ib_historical.CURSOR_DIR", tmp_path):
+            result = load_cursor("test")
+        assert result == {"AAPL": ["1d", "1h"], "MSFT": ["1d"]}
 
     def test_handles_missing_completed_key(self, tmp_path):
         cursor_file = tmp_path / "cursor_test.json"
@@ -251,32 +263,33 @@ class TestLoadCursor:
 
         with patch("scripts.fetch_ib_historical.CURSOR_DIR", tmp_path):
             result = load_cursor("test")
-        assert result == set()
+        assert result == {}
 
 
 class TestSaveCursor:
     def test_writes_cursor_file(self, tmp_path):
         with patch("scripts.fetch_ib_historical.CURSOR_DIR", tmp_path):
-            save_cursor("test", {"AAPL", "MSFT"}, "2025-01-01T00:00:00")
+            save_cursor("test", {"AAPL": ["1d"], "MSFT": ["1d", "1h"]}, "2025-01-01T00:00:00")
 
         cursor_file = tmp_path / "cursor_test.json"
         assert cursor_file.exists()
         data = json.loads(cursor_file.read_text())
         assert set(data["completed"]) == {"AAPL", "MSFT"}
+        assert data["completed"]["AAPL"] == ["1d"]
         assert data["started_at"] == "2025-01-01T00:00:00"
         assert "updated_at" in data
 
     def test_creates_parent_dirs(self, tmp_path):
         cursor_dir = tmp_path / "nested" / "logs"
         with patch("scripts.fetch_ib_historical.CURSOR_DIR", cursor_dir):
-            save_cursor("test", {"AAPL"}, "2025-01-01T00:00:00")
+            save_cursor("test", {"AAPL": ["1d"]}, "2025-01-01T00:00:00")
 
         assert (cursor_dir / "cursor_test.json").exists()
 
     def test_overwrites_existing_cursor(self, tmp_path):
         with patch("scripts.fetch_ib_historical.CURSOR_DIR", tmp_path):
-            save_cursor("test", {"AAPL"}, "2025-01-01T00:00:00")
-            save_cursor("test", {"AAPL", "MSFT"}, "2025-01-01T00:00:00")
+            save_cursor("test", {"AAPL": ["1d"]}, "2025-01-01T00:00:00")
+            save_cursor("test", {"AAPL": ["1d"], "MSFT": ["1d"]}, "2025-01-01T00:00:00")
 
         data = json.loads((tmp_path / "cursor_test.json").read_text())
         assert set(data["completed"]) == {"AAPL", "MSFT"}
@@ -1327,3 +1340,69 @@ class TestMain:
             main()
 
         mock_ib.connect.assert_called_once_with(host="10.0.0.5", port=4002)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Per-timeframe cursor helpers
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestPerTimeframeCursor:
+    def test_load_old_cursor_format_migrates_to_dict(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("scripts.fetch_ib_historical.CURSOR_DIR", tmp_path)
+
+        # Write old format: completed = list of strings
+        old = _cursor_path("test")
+        old.write_text(json.dumps({
+            "completed": ["AAPL", "NVDA"],
+            "started_at": "2026-04-06T10:00:00",
+        }))
+
+        result = load_cursor("test")
+        # Old format is treated as "all timeframes complete" for these tickers
+        assert result == {"AAPL": ["1d", "1h", "5m"], "NVDA": ["1d", "1h", "5m"]}
+
+    def test_load_new_cursor_format(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("scripts.fetch_ib_historical.CURSOR_DIR", tmp_path)
+
+        new = _cursor_path("test")
+        new.write_text(json.dumps({
+            "completed": {"AAPL": ["1d", "1h"], "NVDA": ["1d"]},
+            "started_at": "2026-04-06T10:00:00",
+        }))
+
+        result = load_cursor("test")
+        assert result == {"AAPL": ["1d", "1h"], "NVDA": ["1d"]}
+
+    def test_load_missing_cursor_returns_empty_dict(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("scripts.fetch_ib_historical.CURSOR_DIR", tmp_path)
+        assert load_cursor("nonexistent") == {}
+
+    def test_save_cursor_writes_dict_format(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("scripts.fetch_ib_historical.CURSOR_DIR", tmp_path)
+
+        save_cursor("test", {"AAPL": ["1d", "1h"]}, started_at="2026-04-06T10:00:00")
+
+        loaded = json.loads(_cursor_path("test").read_text())
+        assert loaded["completed"] == {"AAPL": ["1d", "1h"]}
+
+    def test_is_ticker_complete_for_all_timeframes(self):
+        # All 3 done
+        assert is_ticker_complete({"AAPL": ["1d", "1h", "5m"]}, "AAPL", required=("1d", "1h", "5m"))
+        # Missing 5m
+        assert not is_ticker_complete({"AAPL": ["1d", "1h"]}, "AAPL", required=("1d", "1h", "5m"))
+        # Not in cursor
+        assert not is_ticker_complete({}, "AAPL", required=("1d", "1h", "5m"))
+
+    def test_mark_timeframe_done_appends(self):
+        cursor = {"AAPL": ["1d"]}
+        mark_timeframe_done(cursor, "AAPL", "1h")
+        assert cursor == {"AAPL": ["1d", "1h"]}
+
+        # Idempotent
+        mark_timeframe_done(cursor, "AAPL", "1h")
+        assert cursor == {"AAPL": ["1d", "1h"]}
+
+        # New ticker
+        mark_timeframe_done(cursor, "NVDA", "5m")
+        assert cursor == {"AAPL": ["1d", "1h"], "NVDA": ["5m"]}
