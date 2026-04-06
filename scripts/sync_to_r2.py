@@ -19,7 +19,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:  # pragma: no cover
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from clients.bronze_client import PARQUET_FILENAME
+PARQUET_FILES_TO_SYNC = ("1d.parquet", "1h.parquet", "5m.parquet")
 
 logger = logging.getLogger("mdw.sync_to_r2")
 
@@ -58,17 +58,18 @@ def upload(bronze_dir: Path, prefix: str = "bronze", dry_run: bool = False) -> i
     bucket = _get_bucket()
     uploaded = 0
 
-    for parquet_file in bronze_dir.rglob(PARQUET_FILENAME):
-        rel_path = parquet_file.relative_to(bronze_dir.parent)
-        s3_key = str(rel_path).replace("\\", "/")  # Windows compat
+    for parquet_filename in PARQUET_FILES_TO_SYNC:
+        for parquet_file in bronze_dir.rglob(parquet_filename):
+            rel_path = parquet_file.relative_to(bronze_dir.parent)
+            s3_key = str(rel_path).replace("\\", "/")  # Windows compat
 
-        if dry_run:
-            logger.info("[DRY RUN] Would upload %s → s3://%s/%s", parquet_file, bucket, s3_key)
-        else:
-            logger.info("Uploading %s → s3://%s/%s", parquet_file, bucket, s3_key)
-            s3.upload_file(str(parquet_file), bucket, s3_key)
+            if dry_run:
+                logger.info("[DRY RUN] Would upload %s → s3://%s/%s", parquet_file, bucket, s3_key)
+            else:
+                logger.info("Uploading %s → s3://%s/%s", parquet_file, bucket, s3_key)
+                s3.upload_file(str(parquet_file), bucket, s3_key)
 
-        uploaded += 1
+            uploaded += 1
 
     logger.info("Upload complete: %d files %s", uploaded, "(dry run)" if dry_run else "")
     return uploaded
@@ -87,7 +88,7 @@ def download(bronze_dir: Path, prefix: str = "bronze", dry_run: bool = False) ->
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix + "/"):
         for obj in page.get("Contents", []):
             s3_key = obj["Key"]
-            if not s3_key.endswith(PARQUET_FILENAME):
+            if not any(s3_key.endswith(name) for name in PARQUET_FILES_TO_SYNC):
                 continue
 
             local_path = bronze_dir.parent / s3_key.replace("/", os.sep)

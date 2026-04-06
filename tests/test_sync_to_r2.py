@@ -3,7 +3,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
-from scripts.sync_to_r2 import upload, download, main, _get_s3_client, _get_bucket
+from scripts.sync_to_r2 import upload, download, main, _get_s3_client, _get_bucket, PARQUET_FILES_TO_SYNC
 
 
 class TestClientHelpers:
@@ -167,3 +167,53 @@ class TestMain:
             main(["--upload", "--dry-run", "--data-lake", str(tmp_path)])
 
         mock_upload.assert_called_once_with(tmp_path / "bronze", dry_run=True)
+
+
+class TestMultiTimeframeSync:
+    def test_uploads_all_three_timeframes(self, tmp_path):
+        bronze_dir = tmp_path / "bronze"
+        equity_dir = bronze_dir / "asset_class=equity" / "symbol=AAPL"
+        equity_dir.mkdir(parents=True)
+        (equity_dir / "1d.parquet").write_bytes(b"d")
+        (equity_dir / "1h.parquet").write_bytes(b"h")
+        (equity_dir / "5m.parquet").write_bytes(b"m")
+
+        # All three filenames should be in PARQUET_FILES_TO_SYNC
+        assert "1d.parquet" in PARQUET_FILES_TO_SYNC
+        assert "1h.parquet" in PARQUET_FILES_TO_SYNC
+        assert "5m.parquet" in PARQUET_FILES_TO_SYNC
+
+        with patch("scripts.sync_to_r2._get_s3_client") as mock_s3:
+            with patch("scripts.sync_to_r2._get_bucket", return_value="test-bucket"):
+                client = MagicMock()
+                mock_s3.return_value = client
+                count = upload(bronze_dir, dry_run=False)
+
+        assert count == 3
+        # Verify upload_file called 3 times with the right keys
+        calls = client.upload_file.call_args_list
+        keys_uploaded = [c[0][2] for c in calls]
+        assert any("1d.parquet" in k for k in keys_uploaded)
+        assert any("1h.parquet" in k for k in keys_uploaded)
+        assert any("5m.parquet" in k for k in keys_uploaded)
+        assert all("symbol=AAPL" in k for k in keys_uploaded)
+
+    def test_download_accepts_all_three_timeframes(self, tmp_path):
+        bronze_dir = tmp_path / "bronze"
+
+        mock_client = MagicMock()
+        mock_client.get_paginator.return_value.paginate.return_value = [
+            {"Contents": [
+                {"Key": "bronze/asset_class=equity/symbol=AAPL/1d.parquet"},
+                {"Key": "bronze/asset_class=equity/symbol=AAPL/1h.parquet"},
+                {"Key": "bronze/asset_class=equity/symbol=AAPL/5m.parquet"},
+                {"Key": "bronze/asset_class=equity/symbol=AAPL/metadata.json"},
+            ]}
+        ]
+
+        with patch("scripts.sync_to_r2._get_s3_client", return_value=mock_client):
+            with patch("scripts.sync_to_r2._get_bucket", return_value="b"):
+                count = download(bronze_dir)
+
+        assert count == 3
+        assert mock_client.download_file.call_count == 3
