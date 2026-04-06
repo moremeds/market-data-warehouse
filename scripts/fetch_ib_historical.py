@@ -235,6 +235,39 @@ def compute_date_windows(
     return windows
 
 
+def compute_intraday_chunks(
+    timeframe: str,
+    years_back: int,
+) -> list[tuple[str, str]]:
+    """Generate ``(duration_str, end_datetime_str)`` chunks for an intraday backfill.
+
+    For 5m: walks backwards from now in 1-week chunks for ``years_back`` years.
+    For 1h: walks backwards from now in 1-month chunks for ``years_back`` years.
+
+    Raises ValueError on unsupported timeframe.
+    """
+    from clients.intraday_bronze_client import INTRADAY_MAX_REQUEST_DURATION
+
+    if timeframe not in INTRADAY_MAX_REQUEST_DURATION:
+        raise ValueError(f"unsupported intraday timeframe: {timeframe!r}")
+
+    duration = INTRADAY_MAX_REQUEST_DURATION[timeframe]
+    end_dt = datetime.now()
+
+    _step_map = {"5m": timedelta(weeks=1), "1h": timedelta(days=30)}
+    step = _step_map[timeframe]
+
+    head_dt = end_dt - timedelta(days=365 * years_back)
+
+    chunks: list[tuple[str, str]] = []
+    cursor = end_dt
+    while cursor > head_dt:
+        chunks.append((duration, cursor.strftime("%Y%m%d-%H:%M:%S")))
+        cursor -= step
+
+    return chunks
+
+
 # ── Transform ──────────────────────────────────────────────────────────
 
 

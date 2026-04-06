@@ -1406,3 +1406,31 @@ class TestPerTimeframeCursor:
         # New ticker
         mark_timeframe_done(cursor, "NVDA", "5m")
         assert cursor == {"AAPL": ["1d", "1h"], "NVDA": ["5m"]}
+
+
+# ══════════════════════════════════════════════════════════════════════
+# compute_intraday_chunks
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestComputeIntradayChunks:
+    def test_5m_chunks_one_year(self):
+        """5m bars: 1-week chunks for 1 year of depth (~52 weeks)."""
+        from scripts.fetch_ib_historical import compute_intraday_chunks
+        chunks = compute_intraday_chunks(timeframe="5m", years_back=1)
+        assert 50 <= len(chunks) <= 54
+        assert all(c[0] == "1 W" for c in chunks)
+        # Each end-datetime string should be in IB format
+        assert all(len(c[1]) == 17 for c in chunks)  # YYYYMMDD-HH:MM:SS
+
+    def test_1h_chunks_two_years(self):
+        """1h bars: 1-month chunks for 2 years of depth (~24 months)."""
+        from scripts.fetch_ib_historical import compute_intraday_chunks
+        chunks = compute_intraday_chunks(timeframe="1h", years_back=2)
+        assert 22 <= len(chunks) <= 26
+        assert all(c[0] == "1 M" for c in chunks)
+
+    def test_invalid_timeframe_raises(self):
+        from scripts.fetch_ib_historical import compute_intraday_chunks
+        with pytest.raises(ValueError, match="unsupported"):
+            compute_intraday_chunks(timeframe="2m", years_back=1)
