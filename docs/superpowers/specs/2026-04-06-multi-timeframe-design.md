@@ -581,7 +581,120 @@ The empirical probe results (§ 5) are captured as constants in `intraday_bronze
 
 ---
 
-## 17. Verification Plan
+## 17. Data Quality
+
+Two layers of quality enforcement, both in scope for this spec. A third statistical-outlier layer is **deferred to its own spec** (see § 20 Out of Scope).
+
+### Layer 1 — Per-bar validation at ingest (extends `validate_bars`)
+
+The existing `validate_bars()` in `daily_update.py` checks OHLC relationships, positive prices, valid trading days, and dupes. It is reused unchanged for all timeframes. For intraday timeframes, **additional checks** are added:
+
+```python
+def validate_intraday_bar(bar, ticker: str, timeframe: str) -> list[str]:
+    """Intraday-specific checks on top of validate_bars().
+
+    Returns a list of issue strings; empty if the bar is valid.
+    """
+    issues: list[str] = []
+
+    # 1. Timestamp must be tz-aware UTC
+    ts = bar.bar_timestamp
+    if ts.tzinfo is None or ts.utcoffset() != timedelta(0):
+        issues.append(f"{ticker} {ts}: bar_timestamp must be tz-aware UTC")
+        return issues  # downstream checks need a valid timestamp
+
+    # 2. Convert to ET for session-window check
+    et = ts.astimezone(ZoneInfo("America/New_York"))
+
+    # 3. Must fall on a trading day
+    if not is_trading_day(et.date()):
+        issues.append(f"{ticker} {ts}: not a trading day")
+
+    # 4. Must fall within RTH for that day (9:30 ET to session_close)
+    rth_start = et.replace(hour=9, minute=30, second=0, microsecond=0)
+    close_t = session_close_time(et.date())
+    rth_end = et.replace(hour=close_t.hour, minute=close_t.minute, second=0, microsecond=0)
+    if not (rth_start <= et < rth_end):
+        issues.append(f"{ticker} {ts}: outside RTH ({et.time()} ET)")
+
+    # 5. Must align to bar size grid
+    if timeframe == "5m":
+        if et.minute % 5 != 0:
+            issues.append(f"{ticker} {ts}: not aligned to 5-min grid")
+    elif timeframe == "1h":
+        # 1h bars start on the 30 (9:30, 10:30, 11:30, ..., 15:30 ET)
+        if et.minute != 30:
+            issues.append(f"{ticker} {ts}: not aligned to 1h grid (expected :30 ET)")
+
+    return issues
+```
+
+Called from `IntradayBronzeClient._normalize_rows()`. Bars failing validation are **rejected at ingest** and never written to bronze. Rejection counts are logged per fetch run.
+
+### Layer 2 — Coverage tracking and weekly summary report
+
+`scripts/health_check.py` is extended with a new mode that emits a coverage report. Two outputs:
+
+#### Daily coverage check (always runs)
+
+After every daily/intraday update, write a one-line summary to `~/market-warehouse/logs/coverage_YYYY-MM-DD.log`:
+
+```
+2026-04-06 coverage: 1d=1166/1166 (100%) 1h=1162/1166 (99.66%) 5m=1158/1166 (99.31%)
+  1h missing: NEWA, RECENT_IPO, LOWLIQ_1, LOWLIQ_2
+  5m missing: NEWA, RECENT_IPO, ... (8 total)
+```
+
+"Missing" = `latest_bar_timestamp.date() < target_trading_day`. The implementation uses a single DuckDB query per timeframe over the bronze parquet glob (same pattern as `get_all_trade_dates`).
+
+#### Weekly summary (Sunday only)
+
+Aggregates the past 7 daily reports into `~/market-warehouse/logs/quality_weekly_YYYY-WW.md`:
+
+```markdown
+# Weekly Quality Report — Week 14 of 2026
+
+## Coverage trend (per timeframe)
+| Day        | 1d        | 1h        | 5m        |
+|------------|-----------|-----------|-----------|
+| 2026-03-30 | 1166/1166 | 1166/1166 | 1166/1166 |
+| 2026-03-31 | 1166/1166 | 1164/1166 | 1162/1166 |
+| ...        | ...       | ...       | ...       |
+
+## Symbol churn this week
+- Added (3): NEWA, NEWB, NEWC
+- Removed (1): OLDX (archived after 3 consecutive absences)
+
+## Persistent gaps
+Symbols with >2 consecutive days of missing bars at any timeframe:
+- LOWLIQ_1 (5m): missing 5 of last 7 days
+```
+
+The weekly summary is **report-only** — it does not auto-repair. Operator reviews and decides whether to investigate.
+
+#### Email integration
+
+If the daily coverage drops below 95% for any timeframe, send an email alert via the existing Nodemailer CLI. Threshold configurable via `MDW_COVERAGE_ALERT_THRESHOLD` env var (default `0.95`).
+
+### What's deliberately NOT in this spec (deferred)
+
+- **Statistical outlier detection** (5σ moves, ATR spikes, stale bars) — separate concern, separate spec
+- **Cross-source reconciliation** — would need a second data source
+- **Auto-repair of missing intraday bars** — health check § 9 already covers report-only behavior
+- **Liquidity-based exclusions** (skip 5m for thinly-traded names) — out of scope
+
+### Tests
+
+| Component | Test focus |
+|-----------|-----------|
+| `validate_intraday_bar` | Naive datetime rejected; non-RTH timestamp rejected; misaligned grid rejected; valid bar passes |
+| Coverage report | Mock bronze with known gaps, verify report counts and missing-symbol list |
+| Weekly summary | Mock 7 daily logs, verify markdown output, churn detection |
+| Threshold alert | Coverage below threshold triggers `_send_alert` once |
+
+---
+
+## 18. Verification Plan
 
 After implementation:
 
@@ -603,10 +716,12 @@ After implementation:
 7. `python scripts/health_check.py --intraday --dry-run` — verify no false positives on early-close days, holidays, or DST transitions
 8. `python scripts/sync_to_r2.py` — verify all 3 timeframes uploaded
 9. Run screener with `core-etfs.json` and verify SPY/QQQ/etc are in additions (if not yet in bronze) but never in removals
+10. `python scripts/health_check.py --coverage-report` — verify daily coverage log written
+11. Force a weekly summary: `python scripts/health_check.py --weekly-summary --week 2026-W14` — verify markdown report written
 
 ---
 
-## 18. Known Limitations
+## 19. Known Limitations
 
 - Trading halts produce missing intraday bars; the health check reports them but does not auto-distinguish from data loss
 - IB rate limits make full intraday backfill multi-day; the per-timeframe cursor handles resumption
@@ -616,10 +731,13 @@ After implementation:
 
 ---
 
-## 19. Out of Scope (future work)
+## 20. Out of Scope (future work)
 
 - Continuous snapshot job (live bar streaming)
 - Sub-minute bars
 - Multi-timeframe for futures and volatility indices
 - Automatic intraday gap repair (currently report-only)
 - Bar timestamp normalization tooling for non-UTC consumers
+- **Statistical outlier detection** (5σ moves, ATR spikes, stale bars) — separate spec
+- **Cross-source price reconciliation** — needs second data source
+- **Silver/Gold tiers** (split/dividend adjustment, factor tables) — separate spec, see corporate actions discussion
